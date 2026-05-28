@@ -4,7 +4,7 @@ CLAUDE.md
 memory/
 tests/fixtures/
 data/
-notebooks/
+__marimo__/
 experiments/
 porting_reference/
 __pycache__/

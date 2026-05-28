@@ -55,15 +55,14 @@ uv run scripts/filter_waters_by_distance.py pdb_ids.txt [--cutoff 4.0] [--output
 
 | pdb_id | n_waters_before | n_waters_moved | n_waters_removed | n_waters_remaining |
 |--------|-----------------|----------------|------------------|--------------------|
+| 5f14_final | 204 | 22 | 9 | 195 |
 | 5f16_final | 128 | 12 | 0 | 128 |
-| 5fek_final | 22 | 0 | 0 | 22 |
 
 **Assumptions / behaviour:**
-- Altlocs of waters are all loaded; each altloc is checked separately
-- Symmetry-aware: for each water O, all space-group symmetry operations and lattice translations are tried; the nearest protein atom under any image is used as the distance
-- If the closest protein contact is across a symmetry image, the water O is relocated to the canonical asymmetric unit position (phenix `sort_hetatms` convention) before the cutoff test; `n_waters_moved` counts these relocations
+- Altlocs of waters are all loaded
+- The best symmetry-equivalent position for water is found before filtering by distance to protein; `n_waters_moved` counts the water relocations
 - Non-water atoms are always retained
-- All altloc labels (`label_alt_id`) are preserved exactly in the output CIF; no altloc stripping
+- All altloc labels (`label_alt_id`) are preserved
 
 ### Stage 3 — Pairwise alignment
 
@@ -82,12 +81,10 @@ uv run scripts/align_structures.py pdb_ids.txt [--reference PDB_ID] [--input-dir
 | 5f16 | 129 | 42.999 | 0.193 |
 
 **Assumptions / behaviour:**
-- Each mobile structure is aligned independently to the reference (pairwise, not multi-structure global alignment)
-- Cα residue pairing uses BLOSUM62 pairwise sequence alignment (gap open −10, extend −1, no terminal penalty) to handle insertions/deletions robustly
-- Alignment transform is computed from highest-occupancy Cα pairs only; the same rigid transform is then applied to **all** atoms in the structure
-- Protein, ligands, waters, and all altloc variants are transformed together — nothing is dropped
-- Structures with fewer than 10 common Cα are skipped (warning logged)
-- `label_alt_id` is preserved in the written output; no altloc stripping
+- Each mobile structure is aligned independently to the reference
+- Cα (highest-occupancy altloc) pairing uses BLOSUM62 pairwise sequence alignment
+- Rigid transform is then applied to **all** atoms in the structure
+- All altloc labels (`label_alt_id`) are preserved
 
 ### Stage 4 — Cluster waters
 
@@ -108,18 +105,17 @@ uv run scripts/cluster_waters.py pdb_ids.txt [--input-dir DIR] [-o DIR]
 
 **`clusters.csv`** — one row per cluster:
 
-| cluster_id | center_x | center_y | center_z | cluster_occupancy | n_radius_rejected |
-|------------|----------|----------|----------|-------------------|-------------------|
-| 0 | 12.38 | 5.69 | 8.87 | 0.85 | 2 |
-| 1 | 24.11 | 18.02 | 3.44 | 0.72 | 0 |
+| cluster_id | center_x | center_y | center_z | std_x | std_y | std_z | cluster_occupancy | n_radius_rejected |
+|------------|----------|----------|----------|-------|-------|-------|-------------------|-------------------|
+| 0 | 12.38 | 5.69 | 8.87 | 0.21 | 0.18 | 0.23 | 0.85 | 2 |
+| 1 | 24.11 | 18.02 | 3.44 | 0.19 | 0.22 | 0.17 | 0.72 | 0 |
 
 **Assumptions / behaviour:**
-- Water oxygens pooled across all structures; each altloc variant is a separate point
-- HDBSCAN on (x, y, z); `min_cluster_size` derived from `HDBSCAN_MIN_OCCUPANCY * n_structures` (default 0.3) unless `--min-cluster-size` overrides; `min_samples` defaults to `min_cluster_size`
-- Hard **1.4 Å radius** filter after HDBSCAN: members farther than 1.4 Å from the cluster centroid are demoted (`within_cutoff = False`) but retained in `cluster_members.csv`
-- `cluster_occupancy` = fraction of input structures that contribute at least one within-cutoff member to the cluster (distinct from per-atom crystallographic `occupancy`)
+- Each altloc water is a separate entry
+- HDBSCAN on all water (x, y, z); `min_cluster_size` derived from `HDBSCAN_MIN_OCCUPANCY * n_structures` unless overrides; `min_samples` defaults to `min_cluster_size` unless overrides
+- Cluster members farther than `CLUSTER_MEMBER_RADIUS` from the cluster center are labeled `within_cutoff = False`
+- Cluster center x/y/z and std are computed before filtering members
 - Noise points (HDBSCAN label −1) appear in `cluster_members.csv` with `cluster_id = -1`; they are excluded from `clusters.csv`
-- EDIA scores attached from per-structure JSON; `NaN` if the JSON is absent
 
 ## Output directory layout
 
