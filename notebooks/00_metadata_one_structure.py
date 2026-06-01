@@ -19,7 +19,7 @@ def _(mo):
     Exercises `cw/io.py` and `cw/metadata.py` on a single structure from PDB-REDO. We use 6YBF as an example because it has altloc water and could be a difficult case.
 
     **Goals**
-    - Confirm gemmi surfaces space group / cell / resolution correctly.
+    - Confirm gemmi surfaces space group / cell / resolution / unit cell volume correctly.
     - Confirm gemmi raw-CIF read surfaces `experiment_condition` and `starting_model`.
     - Verify that gemmi's water-O count agrees with biotite `altloc="occupancy"` count.
     - Load EDIA and confirm the (chain, res_id, ins_code) keying matches the water atoms.

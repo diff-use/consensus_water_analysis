@@ -125,6 +125,7 @@ def metadata_row(cif_path: Path) -> dict:
         "cell_alpha": cell.alpha,
         "cell_beta": cell.beta,
         "cell_gamma": cell.gamma,
+        "unit_cell_volume": cell.volume,
         "resolution": resolution,
         "r_work": r_work,
         "r_free": r_free,

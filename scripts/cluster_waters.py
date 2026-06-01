@@ -17,7 +17,7 @@ from loguru import logger
 
 import config
 from cw.cluster import build_cluster_tables, occupancy_to_min_cluster_size, run_hdbscan
-from cw.io import collect_aligned_waters, read_cohort
+from cw.io import collect_aligned_waters, read_cohort, write_cluster_cif
 
 
 def main() -> None:
@@ -53,6 +53,16 @@ def main() -> None:
         metavar="N",
         help="HDBSCAN min_samples (default: min_cluster_size)",
     )
+    parser.add_argument(
+        "--write-cif",
+        action="store_true",
+        help="Write cluster centers to clusters.cif after computing CSVs",
+    )
+    parser.add_argument(
+        "--include-noise",
+        action="store_true",
+        help="Include noise waters (cluster_id == -1) in clusters.cif (requires --write-cif)",
+    )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")
     verbosity.add_argument("--quiet", action="store_true", help="Show warnings and errors only")
@@ -80,8 +90,7 @@ def main() -> None:
 
     cif_json_pairs = []
     for member_id in member_ids:
-        pdb_code = member_id.removesuffix("_final")
-        cif = aligned_dir / f"{pdb_code}_final.cif"
+        cif = aligned_dir / f"{member_id}.cif"
         if not cif.exists():
             continue
         edia_path = Path(config.ALL_PDB_REDO_DIR) / config.EDIA_TEMPLATE.format(pdb_id=member_id)
@@ -162,6 +171,16 @@ def main() -> None:
 
     logger.info(f"cluster_members.csv: {len(members_df):,} rows  →  {members_path}")
     logger.info(f"clusters.csv:        {len(clusters_df):,} rows  →  {clusters_path}")
+
+    if args.write_cif:
+        cif_path = out_dir / "clusters.cif"
+        write_cluster_cif(
+            cif_path,
+            clusters_df=clusters_df,
+            members_df=members_df,
+            include_noise=args.include_noise,
+        )
+        logger.info(f"clusters.cif:        {len(clusters_df):,} centers  →  {cif_path}")
 
 
 if __name__ == "__main__":

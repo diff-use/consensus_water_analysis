@@ -101,9 +101,8 @@ def main() -> None:
         logger.info(f"Input:   {config.ALL_PDB_REDO_DIR}  (raw)")
 
     def _input_cif(member_id: str) -> Path:
-        pdb_code = member_id.removesuffix("_final")
         if use_filtered:
-            return filtered_dir / f"{pdb_code}_final.cif"
+            return filtered_dir / f"{member_id}.cif"
         return cif_path_for(member_id, config.ALL_PDB_REDO_DIR, config.CIF_TEMPLATE)
 
     cif_paths = {m: _input_cif(m) for m in member_ids}
@@ -119,8 +118,7 @@ def main() -> None:
 
     rows, n_skipped, n_err = [], 0, 0
     for member_id in found:
-        pdb_code = member_id.removesuffix("_final")
-        out_cif = out_dir / f"{pdb_code}_final.cif"
+        out_cif = out_dir / f"{member_id}.cif"
         try:
             report = align_to_reference(
                 cif_paths[member_id],

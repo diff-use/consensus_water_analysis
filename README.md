@@ -33,14 +33,14 @@ uv run scripts/build_metadata.py pdb_ids.txt [-o metadata.csv]
 - Reads: local mmCIF files
 - Queries: RCSB Data API (for `experiment_condition` and `starting_model` only)
 - Writes: `data/<cohort>/metadata.csv`
-- Columns: `pdb_id`, `space_group`, `cell_a/b/c`, `cell_alpha/beta/gamma`, `resolution`, `r_work`, `r_free`, `num_water`, `ligand_names`, `experiment_condition`, `starting_model`
+- Columns: `pdb_id`, `space_group`, `cell_a/b/c`, `cell_alpha/beta/gamma`, `unit_cell_volume`, `resolution`, `r_work`, `r_free`, `num_water`, `ligand_names`, `experiment_condition`, `starting_model`
 - `num_water` counts all altloc variants (a water with two altlocs contributes 2)
 - Sorted by resolution
 
-| pdb_id | space_group | cell_a | cell_b | cell_c | cell_alpha | cell_beta | cell_gamma | resolution | r_work | r_free | num_water | ligand_names | experiment_condition | starting_model |
-|--------|-------------|--------|--------|--------|------------|-----------|------------|------------|--------|--------|-----------|--------------|----------------------|----------------|
-| 6ybf | P 43 21 2 | 79.11 | 79.11 | 38.02 | 90.0 | 90.0 | 90.0 | 1.13 | 0.14431 | 0.16636 | 90 | CL\|NA | 5% w/v NaCl, 50 mM AcNa pH 4.5 | 1iee |
-| 5f14 | P 43 21 2 | 78.814 | 78.814 | 37.292 | 90.0 | 90.0 | 90.0 | 1.15 | 0.14053 | 0.16588 | 204 | CL\|NA | 10% (w/v) sodium chloride, 0.1M sodium acetate | 1iee |
+| pdb_id | space_group | cell_a | cell_b | cell_c | cell_alpha | cell_beta | cell_gamma | unit_cell_volume | resolution | r_work | r_free | num_water | ligand_names | experiment_condition | starting_model |
+|--------|-------------|--------|--------|--------|------------|-----------|------------|------------------|------------|--------|--------|-----------|--------------|----------------------|----------------|
+| 6ybf | P 43 21 2 | 79.11 | 79.11 | 38.02 | 90.0 | 90.0 | 90.0 | 237944.07 | 1.13 | 0.14431 | 0.16636 | 90 | CL\|NA | 5% w/v NaCl, 50 mM AcNa pH 4.5 | 1iee |
+| 5f14 | P 43 21 2 | 78.814 | 78.814 | 37.292 | 90.0 | 90.0 | 90.0 | 231644.72 | 1.15 | 0.14053 | 0.16588 | 204 | CL\|NA | 10% (w/v) sodium chloride, 0.1M sodium acetate | 1iee |
 
 ### Stage 2 — Filter waters by protein distance
 
