@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "biotite",
     "gemmi",
-    "atomworks",
+    "biotite",
     "hdbscan",
     "numpy",
     "scipy",

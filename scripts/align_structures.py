@@ -37,7 +37,7 @@ def main() -> None:
         type=Path,
         default=None,
         metavar="DIR",
-        help="Directory of input CIFs (default: data/<cohort_id>/filtered_pdbs/)",
+        help="Directory of input CIFs (default: config.DATA_DIR/<cohort_id>/filtered_pdbs/)",
     )
     parser.add_argument(
         "--raw",
@@ -49,7 +49,7 @@ def main() -> None:
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory for aligned CIFs (default: data/<cohort_id>/aligned_pdbs/)",
+        help="Output directory for aligned CIFs (default: config.DATA_DIR/<cohort_id>/aligned_pdbs/)",
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")

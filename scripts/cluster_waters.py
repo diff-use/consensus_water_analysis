@@ -30,14 +30,14 @@ def main() -> None:
         type=Path,
         default=None,
         metavar="DIR",
-        help="Directory of aligned CIFs (default: data/<cohort_id>/aligned_pdbs/)",
+        help="Directory of aligned CIFs (default: config.DATA_DIR/<cohort_id>/aligned_pdbs/)",
     )
     parser.add_argument(
         "-o",
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory for CSVs (default: data/<cohort_id>/)",
+        help="Output directory for CSVs (default: config.DATA_DIR/<cohort_id>/)",
     )
     parser.add_argument(
         "--min-cluster-size",

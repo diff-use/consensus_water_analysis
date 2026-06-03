@@ -30,7 +30,7 @@ def main() -> None:
         "--output",
         type=Path,
         default=None,
-        help="Output CSV path (default: data/<cohort_id>/metadata.csv)",
+        help="Output CSV path (default: config.DATA_DIR/<cohort_id>/metadata.csv)",
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")

@@ -23,7 +23,6 @@ def _(mo):
     - Confirm gemmi raw-CIF read surfaces `experiment_condition` and `starting_model`.
     - Verify that gemmi's water-O count agrees with biotite `altloc="occupancy"` count.
     - Load EDIA and confirm the (chain, res_id, ins_code) keying matches the water atoms.
-    - Inspect the atomworks `ligand_info` dict to confirm `ligand_names` is populated.
     """)
     return
 

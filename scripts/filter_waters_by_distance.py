@@ -36,7 +36,7 @@ def main() -> None:
         "--output-dir",
         type=Path,
         default=None,
-        help="Output directory (default: data/<cohort_id>/filtered_pdbs/)",
+        help="Output directory (default: config.DATA_DIR/<cohort_id>/filtered_pdbs/)",
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")
