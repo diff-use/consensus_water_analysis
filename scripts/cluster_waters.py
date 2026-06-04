@@ -16,7 +16,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from loguru import logger
 
 import config
-from cw.cluster import build_cluster_tables, occupancy_to_min_cluster_size, run_hdbscan
+from cw.cluster import (
+    build_cluster_tables,
+    find_clusters_too_close,
+    occupancy_to_min_cluster_size,
+    run_hdbscan,
+)
 from cw.io import collect_aligned_waters, read_cohort, write_cluster_cif
 
 
@@ -161,6 +166,19 @@ def main() -> None:
     logger.info(
         f"  {n_rejected:,} members demoted (outside {config.CLUSTER_MEMBER_RADIUS} Å of center)"
     )
+
+    min_separation = 2 * config.CLUSTER_MEMBER_RADIUS
+    if not clusters_df.empty:
+        centers = clusters_df[["center_x", "center_y", "center_z"]].to_numpy()
+        close_pairs = find_clusters_too_close(centers, min_separation)
+        logger.info(
+            f"  {len(close_pairs)} center pair(s) within {min_separation} Å "
+            f"(a single water can match both — inflates recall)"
+        )
+        for i, j, dist in close_pairs:
+            cid_i = int(clusters_df.iloc[i]["cluster_id"])
+            cid_j = int(clusters_df.iloc[j]["cluster_id"])
+            logger.debug(f"    clusters {cid_i} & {cid_j}: {dist:.2f} Å apart")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     members_path = out_dir / "cluster_members.csv"

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hdbscan as hdbscan_lib
 import numpy as np
 import pandas as pd
+from scipy.spatial import cKDTree
 
 
 def occupancy_to_min_cluster_size(min_occupancy: float, n_total_structures: int) -> int:
@@ -136,6 +137,23 @@ def build_cluster_tables(
     members_df = _build_members_df(records, labels, radius)
     clusters_df = _build_clusters_df(members_df, n_total_structures)
     return members_df, clusters_df
+
+
+def find_clusters_too_close(
+    centers: np.ndarray,
+    min_separation: float,
+) -> list[tuple[int, int, float]]:
+    """Index pairs of cluster centers closer than min_separation, with distance.
+
+    A single water can fall within r of two centers only when those centers are
+    within 2*r of each other, so pass min_separation = 2 * match_cutoff to flag
+    the centers that make precision/recall matching ambiguous. Returns
+    (i, j, distance) tuples sorted by distance (closest first).
+    """
+    tree = cKDTree(centers)
+    pairs = tree.query_pairs(r=min_separation)
+    out = [(i, j, float(np.linalg.norm(centers[i] - centers[j]))) for i, j in pairs]
+    return sorted(out, key=lambda t: t[2])
 
 
 def compute_cluster_stability(
