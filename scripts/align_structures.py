@@ -140,7 +140,9 @@ def main() -> None:
 
     with open(report_path, "w", newline="") as f:
         writer = csv.DictWriter(
-            f, fieldnames=["pdb_id", "n_common_ca", "rmsd_before", "rmsd_after"]
+            f,
+            fieldnames=["pdb_id", "n_common_ca", "rmsd_before", "rmsd_after"],
+            extrasaction="ignore",
         )
         writer.writeheader()
         writer.writerows(rows)

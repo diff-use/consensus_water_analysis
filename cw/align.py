@@ -80,15 +80,19 @@ def align_to_reference(
     mobile_cif: Path,
     ref_protein: struc.AtomArray,
     *,
-    out_path: Path,
+    out_path: Path | None = None,
     min_common_ca: int = 10,
 ) -> dict | None:
-    """Align one mobile CIF onto the reference protein and write the result.
+    """Align one mobile CIF onto the reference protein.
 
-    Steps: load mobile protein → BLOSUM62 paired Cα → Kabsch R,t →
-    apply transform to ALL atoms in the CIF (preserving altlocs) → write.
+    Steps: load mobile protein → BLOSUM62 paired Cα → Kabsch R,t. The transform
+    is always computed and returned. Writing the transformed CIF is optional:
+    when ``out_path`` is given, R,t is applied to ALL atoms (preserving altlocs)
+    and the result is written there; when it is None (e.g. on-the-fly pairwise
+    analysis), no file is written and the caller transforms coordinates in
+    memory via ``(R @ xyz.T).T + t``.
 
-    Returns a report dict {pdb_id, n_common_ca, rmsd_before, rmsd_after},
+    Returns a report dict {pdb_id, n_common_ca, rmsd_before, rmsd_after, R, t},
     or None if n_common_ca < min_common_ca (skipped with a warning).
     """
     pdb_id = mobile_cif.stem.removesuffix("_final")
@@ -108,11 +112,14 @@ def align_to_reference(
     mob_ca_aligned = (R @ mob_ca.T).T + t
     rmsd_after = float(np.sqrt(np.mean(np.sum((mob_ca_aligned - ref_ca) ** 2, axis=1))))
 
-    write_transformed_cif(mobile_cif_file, R, t, out_path)
+    if out_path is not None:
+        write_transformed_cif(mobile_cif_file, R, t, out_path)
 
     return {
         "pdb_id": pdb_id,
         "n_common_ca": n_common,
         "rmsd_before": round(rmsd_before, 3),
         "rmsd_after": round(rmsd_after, 3),
+        "R": R,
+        "t": t,
     }
