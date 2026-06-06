@@ -4,10 +4,22 @@ import time
 from pathlib import Path
 
 import gemmi
+import numpy as np
 import requests
 
 _RCSB_ENTRY_URL = "https://data.rcsb.org/rest/v1/core/entry/{pdb_id}"
 _WATER_COMPS = frozenset({"HOH", "WAT", "DOD"})
+
+
+def max_cell_diff(cell_a: gemmi.UnitCell, cell_b: gemmi.UnitCell) -> float:
+    """Largest relative percent difference across the six unit-cell parameters.
+
+    For each of (a, b, c, alpha, beta, gamma), computes
+    ``200 * |p1 - p2| / (p1 + p2)`` and returns the maximum.
+    """
+    p1 = np.array([cell_a.a, cell_a.b, cell_a.c, cell_a.alpha, cell_a.beta, cell_a.gamma])
+    p2 = np.array([cell_b.a, cell_b.b, cell_b.c, cell_b.alpha, cell_b.beta, cell_b.gamma])
+    return float(np.max(200.0 * np.abs(p1 - p2) / (p1 + p2)))
 
 
 def _cif_first_float(block: gemmi.cif.Block, tag: str) -> float | str:
