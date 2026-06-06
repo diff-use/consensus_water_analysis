@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
+import gemmi
 import numpy as np
 import pandas as pd
 
@@ -43,6 +45,27 @@ def read_cohort(txt_path: Path) -> list[str]:
 def cif_path_for(pdb_id: str, all_pdb_redo_dir: Path | str, cif_template: str) -> Path:
     """Resolve the CIF path for a PDB ID."""
     return Path(all_pdb_redo_dir) / cif_template.format(pdb_id=pdb_id)
+
+
+def parse_identity(identity: str) -> tuple[str, str, str]:
+    """Split '<mtz_source>_refined_by_<starting_model>_<variant>' into its three parts."""
+    mtz_source, rest = identity.split("_refined_by_", 1)
+    starting_model, variant = rest.rsplit("_", 1)
+    return mtz_source, starting_model, variant
+
+
+def read_phenix_cif(path: Path) -> pdbx.CIFFile:
+    """Read a phenix refinement CIF into a clean single-block biotite CIFFile.
+
+    Phenix output CIFs embed an `_atom_type` loop with multi-line (`;`-delimited)
+    text values that biotite 1.4's reader cannot parse — it silently drops
+    `atom_site` — and append monomer-restraint data blocks. gemmi parses them
+    fine, so round-tripping through gemmi's mmCIF writer yields a clean
+    single-block document biotite can read. Water altlocs and occupancies are
+    preserved through the round-trip.
+    """
+    st = gemmi.read_structure(str(path))
+    return pdbx.CIFFile.read(io.StringIO(st.make_mmcif_document().as_string()))
 
 
 # ── CIF reading ───────────────────────────────────────────────────────────────
