@@ -7,11 +7,6 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 
-def occupancy_to_min_cluster_size(min_occupancy: float, n_total_structures: int) -> int:
-    """Convert a minimum occupancy fraction to the integer min_cluster_size for HDBSCAN."""
-    return max(2, round(min_occupancy * n_total_structures))
-
-
 def run_hdbscan(
     coords: np.ndarray,
     *,
@@ -19,6 +14,7 @@ def run_hdbscan(
     min_samples: int | None = None,
     cluster_selection_method: str = "eom",
     cluster_selection_epsilon: float = 0.0,
+    n_jobs: int | None = None,
 ) -> np.ndarray:
     """Cluster (x, y, z) coordinates with HDBSCAN. Returns integer labels (-1 = noise).
 
@@ -29,6 +25,7 @@ def run_hdbscan(
         min_samples=min_samples if min_samples is not None else min_cluster_size,
         cluster_selection_method=cluster_selection_method,
         cluster_selection_epsilon=cluster_selection_epsilon,
+        core_dist_n_jobs=n_jobs if n_jobs is not None else 1,
     )
     return clusterer.fit_predict(coords)
 

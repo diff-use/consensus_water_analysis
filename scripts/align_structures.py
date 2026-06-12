@@ -11,16 +11,45 @@ Writes aligned CIFs to data/<cohort_id>/aligned_pdbs/ and alignment_report_{ref_
 
 import argparse
 import csv
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from joblib import Parallel, delayed
 from loguru import logger
+from tqdm import tqdm
 
 import config
 from cw.align import align_to_reference
 from cw.io import cif_path_for, load_protein, read_cohort
+
+# Per-worker cache so each loky worker loads the reference protein only once,
+# rather than pickling it across for every one of ~1000 tasks.
+_REF_CACHE: dict[str, object] = {}
+
+
+def _ref_protein(ref_cif: Path):
+    key = str(ref_cif)
+    protein = _REF_CACHE.get(key)
+    if protein is None:
+        protein, _ = load_protein(ref_cif)
+        _REF_CACHE[key] = protein
+    return protein
+
+
+def _align_one(
+    member_id: str, in_cif: Path, out_cif: Path, ref_cif: Path
+) -> tuple[dict | None, str | None, str | None]:
+    """Align one structure onto the reference. Returns (report, skip_id, error)."""
+    try:
+        report = align_to_reference(in_cif, _ref_protein(ref_cif), out_path=out_cif)
+        if report is None:
+            return (None, member_id, None)
+        return (report, None, None)
+    except Exception as exc:
+        return (None, None, f"{member_id}: {exc}")
 
 
 def main() -> None:
@@ -51,6 +80,14 @@ def main() -> None:
         default=None,
         help="Output directory for aligned CIFs (default: config.DATA_DIR/<cohort_id>/aligned_pdbs/)",
     )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=os.cpu_count(),
+        metavar="N",
+        help="Parallel worker processes (default: all CPUs)",
+    )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")
     verbosity.add_argument("--quiet", action="store_true", help="Show warnings and errors only")
@@ -76,12 +113,11 @@ def main() -> None:
     out_dir = args.output_dir or data_dir / "aligned_pdbs"
     report_path = out_dir / f"alignment_report_{ref_id}.csv"
 
-    # Load reference protein from original CIF (altloc labels intact)
+    # Reference CIF (original, altloc labels intact); workers load it once each.
     ref_cif = cif_path_for(ref_id, config.ALL_PDB_REDO_DIR, config.CIF_TEMPLATE)
     if not ref_cif.exists():
         logger.error(f"Reference CIF not found: {ref_cif}")
         sys.exit(1)
-    ref_protein, _ = load_protein(ref_cif)
 
     # Decide input source
     member_ids = read_cohort(cohort_path)
@@ -113,30 +149,30 @@ def main() -> None:
     logger.info(f"Members: {len(member_ids)} total — {len(found)} found, {len(missing)} missing")
     logger.info(f"Ref:     {ref_id}")
     logger.info(f"Output:  {out_dir}")
+    logger.info(f"Jobs:    {args.jobs}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    rows, n_skipped, n_err = [], 0, 0
-    for member_id in found:
-        out_cif = out_dir / f"{member_id}.cif"
-        try:
-            report = align_to_reference(
-                cif_paths[member_id],
-                ref_protein,
-                out_path=out_cif,
+    results = Parallel(n_jobs=args.jobs, return_as="generator_unordered")(
+        delayed(_align_one)(m, cif_paths[m], out_dir / f"{m}.cif", ref_cif)
+        for m in found
+    )
+
+    rows, skipped, errors = [], [], []
+    for report, skip_id, error in tqdm(results, total=len(found), desc="aligning"):
+        if error is not None:
+            errors.append(error)
+        elif skip_id is not None:
+            skipped.append(skip_id)
+            logger.debug(f"  {skip_id}: skipped (too few common Cα)")
+        else:
+            rows.append(report)
+            logger.debug(
+                f"  {report['pdb_id']}: {report['n_common_ca']} Cα  "
+                f"RMSD {report['rmsd_before']} → {report['rmsd_after']} Å"
             )
-            if report is None:
-                n_skipped += 1
-                logger.warning(f"  {member_id}: skipped (too few common Cα)")
-            else:
-                rows.append(report)
-                logger.info(
-                    f"  {member_id}: {report['n_common_ca']} Cα  "
-                    f"RMSD {report['rmsd_before']} → {report['rmsd_after']} Å"
-                )
-        except Exception as exc:
-            n_err += 1
-            logger.error(f"  {member_id}: {exc}")
+
+    rows.sort(key=lambda r: r["pdb_id"])
 
     with open(report_path, "w", newline="") as f:
         writer = csv.DictWriter(
@@ -147,12 +183,14 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(rows)
 
+    for error in errors:
+        logger.error(f"  {error}")
     logger.info(f"Aligned {len(rows)} structures → {out_dir}")
     logger.info(f"Report:  {report_path}")
-    if n_skipped:
-        logger.warning(f"{n_skipped} skipped (< 10 common Cα)")
-    if n_err:
-        logger.warning(f"{n_err} errors (see above)")
+    if skipped:
+        logger.warning(f"{len(skipped)} skipped (< 10 common Cα)")
+    if errors:
+        logger.warning(f"{len(errors)} errors (see above)")
 
 
 if __name__ == "__main__":

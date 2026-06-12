@@ -4,6 +4,8 @@ import biotite.structure as struc
 import gemmi
 import numpy as np
 
+from cw.io import water_oxygen_mask
+
 
 def best_sym_positions(
     water_pos_orth: np.ndarray,
@@ -85,7 +87,7 @@ def filter_by_distance(
     keep_mask      : boolean mask (length = len(atoms)) for filtering CIF rows
     """
     is_water = (atoms.res_name == "HOH") & atoms.hetero
-    water_O_mask = is_water & (atoms.element == "O")
+    water_O_mask = water_oxygen_mask(atoms)
     protein_heavy_mask = (~atoms.hetero) & (atoms.element != "H")
     non_water_mask = ~is_water
 
