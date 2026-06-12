@@ -102,12 +102,24 @@ def main() -> None:
     member_ids = read_cohort(cohort_path)
 
     cif_json_pairs = []
+    n_muse = 0
     for member_id in member_ids:
         cif = aligned_dir / f"{member_id}.cif"
         if not cif.exists():
             continue
         edia_path = Path(config.ALL_PDB_REDO_DIR) / config.EDIA_TEMPLATE.format(pdb_id=member_id)
-        cif_json_pairs.append((cif, edia_path if edia_path.exists() else None))
+        muse_path = Path(config.MUSE_DIR) / config.MUSE_TEMPLATE.format(
+            cohort=cohort_id, pdb_id=member_id
+        )
+        if muse_path.exists():
+            n_muse += 1
+        cif_json_pairs.append(
+            (
+                cif,
+                edia_path if edia_path.exists() else None,
+                muse_path if muse_path.exists() else None,
+            )
+        )
 
     n_total = len(member_ids)
     n_found = len(cif_json_pairs)
@@ -121,6 +133,7 @@ def main() -> None:
     logger.info(
         f"Members:          {n_total} total — {n_found} aligned CIFs found, {n_total - n_found} missing"
     )
+    logger.info(f"MUSE scores:      {n_muse}/{n_found} structures have a MUSE CSV")
     logger.info(f"Input:            {aligned_dir}")
     logger.info(f"Output:           {out_dir}")
     if args.min_cluster_size is not None:

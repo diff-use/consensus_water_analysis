@@ -9,13 +9,14 @@ import numpy as np
 import pandas as pd
 
 # Altloc values PSEUDO treats as "no altloc" when generating MUSE scores.
-MUSE_VALID_ALTLOCS: frozenset[str] = frozenset({"\x00", " ", "A", ""})
+# "." is biotite's altloc_id for a water with no alternate conformers.
+MUSE_VALID_ALTLOCS: frozenset[str] = frozenset({"\x00", " ", "A", "", "."})
 
 # ── utilities ─────────────────────────────────────────────────────────────────
 
 
 def normalize_ins_code(ins_code) -> str:
-    if ins_code is None:
+    if ins_code is None or (isinstance(ins_code, float) and pd.isna(ins_code)):
         return ""
     value = str(ins_code).strip()
     return "" if value in {"", "?"} else value
@@ -251,17 +252,18 @@ def load_structure_waters(
 
 
 def collect_aligned_waters(
-    cif_json_pairs: list[tuple[Path, Path | None]],
+    cif_json_pairs: list[tuple[Path, Path | None, Path | None]],
     *,
     out_path: Path | None = None,
 ) -> pd.DataFrame:
     """Concatenate water records from aligned CIFs into one DataFrame.
 
-    Each element of cif_json_pairs is (aligned_cif, edia_json_path), where
-    edia_json_path may be None if EDIA is unavailable for that structure.
-    If out_path is given the result is also written to CSV before returning.
+    Each element of cif_json_pairs is (aligned_cif, edia_json_path, muse_csv),
+    where edia_json_path / muse_csv may be None if that score is unavailable
+    for the structure. If out_path is given the result is also written to CSV
+    before returning.
     """
-    frames = [load_structure_waters(cif, json) for cif, json in cif_json_pairs]
+    frames = [load_structure_waters(cif, json, muse) for cif, json, muse in cif_json_pairs]
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)

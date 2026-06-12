@@ -11,6 +11,7 @@ from cw.io import load_structure_waters, normalize_ins_code, write_filtered_cif
     "inp,expected",
     [
         (None, ""),
+        (float("nan"), ""),  # pandas reads an empty CSV insertion_code as NaN
         ("", ""),
         ("?", ""),
         ("  ", ""),
