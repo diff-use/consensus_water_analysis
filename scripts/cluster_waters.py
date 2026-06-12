@@ -19,7 +19,6 @@ import config
 from cw.cluster import (
     build_cluster_tables,
     find_clusters_too_close,
-    occupancy_to_min_cluster_size,
     run_hdbscan,
 )
 from cw.io import collect_aligned_waters, read_cohort, write_cluster_cif
@@ -49,14 +48,14 @@ def main() -> None:
         type=int,
         default=None,
         metavar="N",
-        help="Override HDBSCAN min_cluster_size (default: derived from HDBSCAN_MIN_OCCUPANCY)",
+        help="Override HDBSCAN min_cluster_size (default: config.HDBSCAN_MIN_CLUSTER_SIZE)",
     )
     parser.add_argument(
         "--min-samples",
         type=int,
         default=None,
         metavar="N",
-        help="HDBSCAN min_samples (default: min_cluster_size)",
+        help="Override HDBSCAN min_samples (default: config.HDBSCAN_MIN_SAMPLES)",
     )
     parser.add_argument(
         "--write-cif",
@@ -123,11 +122,14 @@ def main() -> None:
 
     n_total = len(member_ids)
     n_found = len(cif_json_pairs)
-    derived_min_cluster_size = occupancy_to_min_cluster_size(config.HDBSCAN_MIN_OCCUPANCY, n_found)
     min_cluster_size = (
-        args.min_cluster_size if args.min_cluster_size is not None else derived_min_cluster_size
+        args.min_cluster_size
+        if args.min_cluster_size is not None
+        else config.HDBSCAN_MIN_CLUSTER_SIZE
     )
-    min_samples = args.min_samples
+    min_samples = (
+        args.min_samples if args.min_samples is not None else config.HDBSCAN_MIN_SAMPLES
+    )
 
     logger.info(f"Cohort:           {cohort_id}")
     logger.info(
@@ -136,16 +138,10 @@ def main() -> None:
     logger.info(f"MUSE scores:      {n_muse}/{n_found} structures have a MUSE CSV")
     logger.info(f"Input:            {aligned_dir}")
     logger.info(f"Output:           {out_dir}")
-    if args.min_cluster_size is not None:
-        logger.info(f"Min cluster size: {min_cluster_size}  (override)")
-    else:
-        logger.info(
-            f"Min occupancy:    {config.HDBSCAN_MIN_OCCUPANCY}  →  min_cluster_size = {min_cluster_size}"
-        )
-    if args.min_samples is not None:
-        logger.info(f"Min samples:      {min_samples}  (override)")
-    else:
-        logger.info(f"Min samples:      {min_samples or f'default (= {min_cluster_size})'}")
+    min_cluster_size_source = "override" if args.min_cluster_size is not None else "config"
+    min_samples_source = "override" if args.min_samples is not None else "config"
+    logger.info(f"Min cluster size: {min_cluster_size}  ({min_cluster_size_source})")
+    logger.info(f"Min samples:      {min_samples}  ({min_samples_source})")
     logger.info(f"Cluster radius:   {config.CLUSTER_MEMBER_RADIUS} Å")
 
     if n_found == 0:

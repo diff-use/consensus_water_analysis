@@ -112,7 +112,7 @@ uv run scripts/cluster_waters.py pdb_ids.txt [--input-dir DIR] [-o DIR]
 
 **Assumptions / behaviour:**
 - Each altloc water is a separate entry
-- HDBSCAN on all water (x, y, z); `min_cluster_size` derived from `HDBSCAN_MIN_OCCUPANCY * n_structures` unless overrides; `min_samples` defaults to `min_cluster_size` unless overrides
+- HDBSCAN on all water (x, y, z); `min_cluster_size` and `min_samples` come from `HDBSCAN_MIN_CLUSTER_SIZE` / `HDBSCAN_MIN_SAMPLES` unless overrides
 - Cluster members farther than `CLUSTER_MEMBER_RADIUS` from the cluster center are labeled `within_cutoff = False`
 - Cluster center x/y/z and std are computed before filtering members
 - Noise points (HDBSCAN label −1) appear in `cluster_members.csv` with `cluster_id = -1`; they are excluded from `clusters.csv`
@@ -142,7 +142,8 @@ data/<cohort>/
 | `DATA_DIR` | `./data` | Root for all output artifacts |
 | `REF_PDB_ID` | — | Reference structure for alignment |
 | `WATER_PROT_DIST_CUTOFF` | `4.0` | Distance cutoff in Å (Stage 2) |
-| `HDBSCAN_MIN_OCCUPANCY` | `0.3` | Fraction of structures needed to form a cluster |
+| `HDBSCAN_MIN_CLUSTER_SIZE` | `20` | HDBSCAN min_cluster_size (waters per cluster) |
+| `HDBSCAN_MIN_SAMPLES` | `10` | HDBSCAN min_samples |
 | `CLUSTER_MEMBER_RADIUS` | `1.4` | Radius in Å for post-HDBSCAN membership filter |
 
 ## Verbosity

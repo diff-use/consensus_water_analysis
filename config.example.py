@@ -7,4 +7,5 @@ DATA_DIR = "./data"
 REF_PDB_ID = "1abc"
 WATER_PROT_DIST_CUTOFF = 4.0
 CLUSTER_MEMBER_RADIUS = 1.4
-HDBSCAN_MIN_OCCUPANCY = 0.3  # * num_structures = min_cluster_size
+HDBSCAN_MIN_CLUSTER_SIZE = 20  # HDBSCAN min_cluster_size (waters per cluster)
+HDBSCAN_MIN_SAMPLES = 10  # HDBSCAN min_samples
