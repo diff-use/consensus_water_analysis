@@ -45,6 +45,16 @@ def cif_path_for(pdb_id: str, all_pdb_redo_dir: Path | str, cif_template: str) -
     return Path(all_pdb_redo_dir) / cif_template.format(pdb_id=pdb_id)
 
 
+def water_oxygen_mask(atoms: struc.AtomArray) -> np.ndarray:
+    """Boolean mask selecting water oxygen atoms (HOH, hetero, element O)."""
+    return (atoms.res_name == "HOH") & atoms.hetero & (atoms.element == "O")
+
+
+def count_water_oxygens(atoms: struc.AtomArray) -> int:
+    """Count water oxygens (each altloc counted separately)."""
+    return int(water_oxygen_mask(atoms).sum())
+
+
 # ── CIF reading ───────────────────────────────────────────────────────────────
 
 
@@ -212,8 +222,7 @@ def load_structure_waters(
     pdb_id = cif_path.stem.removesuffix("_final")
     cf = pdbx.CIFFile.read(cif_path)
     atoms = pdbx.get_structure(cf, model=1, altloc="all", extra_fields=["b_factor", "occupancy"])
-    water_mask = (atoms.res_name == "HOH") & atoms.hetero & (atoms.element == "O")
-    waters = atoms[water_mask]
+    waters = atoms[water_oxygen_mask(atoms)]
 
     df = pd.DataFrame(
         {

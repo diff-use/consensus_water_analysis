@@ -90,9 +90,11 @@ def metadata_row(cif_path: Path) -> dict:
     # so a water with altlocs A and B contributes two oxygen atoms.
     import biotite.structure.io.pdbx as pdbx
 
+    from cw.io import count_water_oxygens
+
     _cif = pdbx.CIFFile.read(cif_path)
     _atoms = pdbx.get_structure(_cif, model=1, altloc="all")
-    num_water = int(((_atoms.res_name == "HOH") & _atoms.hetero & (_atoms.element == "O")).sum())
+    num_water = count_water_oxygens(_atoms)
 
     # --- gemmi raw CIF: R-work, R-free, ligand names ---
     block = gemmi.cif.read(str(cif_path)).sole_block()

@@ -12,6 +12,7 @@ dependencies = [
     "gemmi",
     "biotite",
     "hdbscan",
+    "joblib",
     "numpy",
     "scipy",
     "pandas",

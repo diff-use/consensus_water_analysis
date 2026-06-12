@@ -68,6 +68,14 @@ def main() -> None:
         action="store_true",
         help="Include noise waters (cluster_id == -1) in clusters.cif (requires --write-cif)",
     )
+    parser.add_argument(
+        "-j",
+        "--n-jobs",
+        type=int,
+        default=None,
+        metavar="JOBS",
+        help="Number of jobs to run in parallel (default: None means 1)",
+    )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")
     verbosity.add_argument("--quiet", action="store_true", help="Show warnings and errors only")
@@ -142,10 +150,12 @@ def main() -> None:
     coords = waters[["x", "y", "z"]].to_numpy()
 
     logger.info("Running HDBSCAN...")
+    logger.info(f"  n_jobs: {args.n_jobs}")
     labels = run_hdbscan(
         coords,
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
+        n_jobs=args.n_jobs,
     )
     n_clusters = len(set(labels[labels >= 0]))
     n_noise = int((labels == -1).sum())

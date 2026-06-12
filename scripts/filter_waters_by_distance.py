@@ -9,6 +9,7 @@ Writes filtering_report_{cutoff}.csv to the same output directory.
 
 import argparse
 import csv
+import os
 import sys
 from pathlib import Path
 
@@ -16,11 +17,47 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import biotite.structure.io.pdbx as pdbx
 import gemmi
+from joblib import Parallel, delayed
 from loguru import logger
+from tqdm import tqdm
 
 import config
 from cw.filter import filter_by_distance
 from cw.io import cif_path_for, read_cohort, write_filtered_cif
+
+
+def _filter_one(
+    member_id: str, cif_path: Path, out_path: Path, cutoff: float
+) -> tuple[dict | None, str | None]:
+    """Filter one structure's waters and write the result. Returns (report_row, error)."""
+    try:
+        st = gemmi.read_structure(str(cif_path))
+        cell = st.cell
+        sg = st.find_spacegroup() or gemmi.SpaceGroup("P 1")
+
+        cif_file = pdbx.CIFFile.read(cif_path)
+        atoms = pdbx.get_structure(
+            cif_file,
+            model=1,
+            altloc="all",
+            extra_fields=["b_factor", "occupancy"],
+        )
+        filtered, n_water, n_removed, n_moved, keep_mask = filter_by_distance(
+            atoms, cell, sg, cutoff
+        )
+        write_filtered_cif(cif_file, keep_mask, filtered, out_path)
+        return (
+            {
+                "pdb_id": member_id,
+                "n_waters_before": n_water,
+                "n_waters_moved": n_moved,
+                "n_waters_removed": n_removed,
+                "n_waters_remaining": n_water - n_removed,
+            },
+            None,
+        )
+    except Exception as exc:
+        return (None, f"{member_id}: {exc}")
 
 
 def main() -> None:
@@ -37,6 +74,14 @@ def main() -> None:
         type=Path,
         default=None,
         help="Output directory (default: config.DATA_DIR/<cohort_id>/filtered_pdbs/)",
+    )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=os.cpu_count(),
+        metavar="N",
+        help="Parallel worker processes (default: all CPUs)",
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")
@@ -72,47 +117,28 @@ def main() -> None:
         logger.warning(f"Missing CIFs: {', '.join(missing)}")
     logger.info(f"Output:  {out_dir}")
     logger.info(f"Cutoff:  {args.cutoff} Å")
+    logger.info(f"Jobs:    {args.jobs}")
 
-    rows, n_ok, n_err = [], 0, 0
-    for member_id in found:
-        cif_path = cif_paths[member_id]
-        try:
-            st = gemmi.read_structure(str(cif_path))
-            cell = st.cell
-            sg = st.find_spacegroup() or gemmi.SpaceGroup("P 1")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-            cif_file = pdbx.CIFFile.read(cif_path)
-            atoms = pdbx.get_structure(
-                cif_file,
-                model=1,
-                altloc="all",
-                extra_fields=["b_factor", "occupancy"],
-            )
-            filtered, n_water, n_removed, n_moved, keep_mask = filter_by_distance(
-                atoms, cell, sg, args.cutoff
+    results = Parallel(n_jobs=args.jobs, return_as="generator_unordered")(
+        delayed(_filter_one)(m, cif_paths[m], out_dir / f"{m}.cif", args.cutoff)
+        for m in found
+    )
+
+    rows, errors = [], []
+    for row, error in tqdm(results, total=len(found), desc="filtering"):
+        if error is not None:
+            errors.append(error)
+        else:
+            rows.append(row)
+            logger.debug(
+                f"  {row['pdb_id']}: {row['n_waters_before']} waters  "
+                f"moved {row['n_waters_moved']}  removed {row['n_waters_removed']}  "
+                f"→ {row['n_waters_remaining']} remaining"
             )
 
-            out_path = out_dir / f"{member_id}.cif"
-            write_filtered_cif(cif_file, keep_mask, filtered, out_path)
-
-            rows.append(
-                {
-                    "pdb_id": member_id,
-                    "n_waters_before": n_water,
-                    "n_waters_moved": n_moved,
-                    "n_waters_removed": n_removed,
-                    "n_waters_remaining": n_water - n_removed,
-                }
-            )
-            n_ok += 1
-            logger.info(
-                f"  {member_id}: {n_water} waters  "
-                f"moved {n_moved}  removed {n_removed}  "
-                f"→ {n_water - n_removed} remaining"
-            )
-        except Exception as exc:
-            n_err += 1
-            logger.error(f"  {member_id}: {exc}")
+    rows.sort(key=lambda r: r["pdb_id"])
 
     cutoff_str = f"{args.cutoff:.2f}A"
     report_path = out_dir / f"filtering_report_{cutoff_str}.csv"
@@ -130,7 +156,9 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(rows)
 
-    logger.info(f"Done: {n_ok} written, {n_err} errors")
+    for error in errors:
+        logger.error(f"  {error}")
+    logger.info(f"Done: {len(rows)} written, {len(errors)} errors")
     logger.info(f"Report: {report_path}")
 
 

@@ -29,7 +29,7 @@ import config
 from cw.align import align_to_reference
 from cw.io import load_protein, load_structure_waters, read_cohort
 from cw.metadata import max_cell_diff
-from cw.plots import chamfer_distance, matched_precision_recall, precision_recall
+from cw.metrics import chamfer_distance, matched_precision_recall, precision_recall
 
 METRIC_FIELDS = [
     "n_common_ca",

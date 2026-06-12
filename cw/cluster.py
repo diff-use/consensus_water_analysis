@@ -19,6 +19,7 @@ def run_hdbscan(
     min_samples: int | None = None,
     cluster_selection_method: str = "eom",
     cluster_selection_epsilon: float = 0.0,
+    n_jobs: int | None = None,
 ) -> np.ndarray:
     """Cluster (x, y, z) coordinates with HDBSCAN. Returns integer labels (-1 = noise).
 
@@ -29,6 +30,7 @@ def run_hdbscan(
         min_samples=min_samples if min_samples is not None else min_cluster_size,
         cluster_selection_method=cluster_selection_method,
         cluster_selection_epsilon=cluster_selection_epsilon,
+        core_dist_n_jobs=n_jobs,
     )
     return clusterer.fit_predict(coords)
 
