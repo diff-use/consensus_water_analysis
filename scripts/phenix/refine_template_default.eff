@@ -24,7 +24,7 @@ data_manager {
 }
 refinement {
   refine {
-    strategy = individual_sites individual_sites_real_space *rigid_body \
+    strategy = *individual_sites *individual_sites_real_space rigid_body \
                *individual_adp group_adp tls *occupancies group_anomalous den
   }
   main {
@@ -33,8 +33,8 @@ refinement {
     number_of_macro_cycles = $NUMCYCLE
   }
   ordered_solvent {
-    mode = second_half filter_only every_macro_cycle \
-           *every_macro_cycle_after_first
+    mode = *second_half filter_only every_macro_cycle \
+           every_macro_cycle_after_first
     primary_map_cutoff = $MAPCUTOFF
   }
   output {

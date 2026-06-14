@@ -1,7 +1,6 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EFF_TEMPLATE="${SCRIPT_DIR}/refine_template.eff"
 
 # ===============================================================================
 # Normally invoked by re-refine_all.sh. To run this script standalone, uncomment
@@ -19,9 +18,17 @@ echo "NPROC: ${NPROC} NUMCYCLE: ${NUMCYCLE} MAPCUTOFF: ${MAPCUTOFF}"
 PDBID=${1:-"3atn"}
 REF_PDBID=${2:-$PDBID}
 
-# OUT_DIR: cohort-scoped output tree under the pipeline data root.
+# OUT_DIR: cohort-scoped output tree under the pipeline data root. STRATEGY selects
+# the eff template and isolates each strategy's results in its own
+# <cohort>_<strategy>_phenix tree.
 : "${COHORT_ID:?not set — re-refine_all.sh exports it; set it for standalone runs}"
-OUT_DIR="${DATA_DIR}/${COHORT_ID}_phenix/refinement_results"
+STRATEGY="${STRATEGY:-rigid}"
+case "$STRATEGY" in
+    rigid)   EFF_TEMPLATE="${SCRIPT_DIR}/refine_template_rigid.eff";   PHENIX_COHORT="${COHORT_ID}_rigid" ;;
+    default) EFF_TEMPLATE="${SCRIPT_DIR}/refine_template_default.eff"; PHENIX_COHORT="${COHORT_ID}_default" ;;
+    *) echo "error: STRATEGY must be 'rigid' or 'default'" >&2; exit 1 ;;
+esac
+OUT_DIR="${DATA_DIR}/${PHENIX_COHORT}_phenix/refinement_results"
 
 if [ ! -d "$DATA_DIR" ]; then
     echo "error: DATA_DIR does not exist: $DATA_DIR" >&2
@@ -43,7 +50,7 @@ if [ ! -f "$STRIPPED_CIFFILE" ]; then
     echo "Stripping water from ${REF_PDBID}"
     mkdir -p "$STRIPPED_DIR"
     cd "$STRIPPED_DIR"
-        phenix.pdbtools "${CIFFILE}" remove="resname HOH" output.suffix="_waterstripped" > /dev/null 2>1
+        phenix.pdbtools "${CIFFILE}" remove="resname HOH" output.suffix="_waterstripped" > /dev/null 2>&1
         echo "Finished stripping water from ${REF_PDBID}, entering ${PDBID} output directory"
 else
     echo "Water-stripped CIF file already exists: ${STRIPPED_CIFFILE}"
@@ -52,7 +59,8 @@ fi
 echo "================================================"
 echo "Refining ${PDBID} using ${REF_PDBID} as reference"
 echo "================================================"
-for tag in fixed auto stripped; do
+for tag in auto stripped; do
+# for tag in fixed auto stripped; do
     EFF_CIFFILE=$CIFFILE
     EFF_OUTPREFIX=${OUTPREFIX}_${tag}
     ORDERED_SOLVENT=""
@@ -69,6 +77,6 @@ for tag in fixed auto stripped; do
     fi
     mkdir -p $refine_dir
     cd $refine_dir
-    phenix.refine ${EFF_CIFFILE} ${EFF_TEMPLATE} ${ORDERED_SOLVENT} output.prefix=${EFF_OUTPREFIX} > /dev/null 2>1
+    phenix.refine ${EFF_CIFFILE} ${EFF_TEMPLATE} ${ORDERED_SOLVENT} output.prefix=${EFF_OUTPREFIX} > /dev/null 2>&1
     grep "Final R-work" ${EFF_OUTPREFIX}_001.log
 done
