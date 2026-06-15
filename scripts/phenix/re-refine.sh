@@ -43,31 +43,36 @@ CIFFILE="${ALL_PDB_REDO_DIR}/${REF_PDBID}/${REF_PDBID}_final.cif"
 SUFFIX="refined_by_${REF_PDBID}"
 OUTPREFIX="${PDBID}_${SUFFIX}"
 
-# The water-stripped reference cif lives in the reference structure's own subfolder.
-STRIPPED_DIR="${OUT_DIR}/${REF_PDBID}"
-STRIPPED_CIFFILE="${STRIPPED_DIR}/${REF_PDBID}_final_waterstripped.cif"
-if [ ! -f "$STRIPPED_CIFFILE" ]; then
-    echo "Stripping water from ${REF_PDBID}"
-    mkdir -p "$STRIPPED_DIR"
-    cd "$STRIPPED_DIR"
-        phenix.pdbtools "${CIFFILE}" remove="resname HOH" output.suffix="_waterstripped" > /dev/null 2>&1
-        echo "Finished stripping water from ${REF_PDBID}, entering ${PDBID} output directory"
-else
-    echo "Water-stripped CIF file already exists: ${STRIPPED_CIFFILE}"
+# Reference cifs live in the reference's own subfolder. phenix.pdbtools re-emits
+# the model without the deposited TLS metadata that phenix.refine asserts on, so
+# auto/stripped/fixed share a consistent baseline. WATERKEPT feeds auto/fixed;
+# WATERSTRIPPED additionally removes waters. re-refine_all.sh precomputes both;
+# this block only runs for standalone invocations.
+REF_DIR="${OUT_DIR}/${REF_PDBID}"
+WATERKEPT_CIFFILE="${REF_DIR}/${REF_PDBID}_final_waterkept.cif"
+WATERSTRIPPED_CIFFILE="${REF_DIR}/${REF_PDBID}_final_waterstripped.cif"
+mkdir -p "$REF_DIR"
+if [ ! -f "$WATERKEPT_CIFFILE" ]; then
+    echo "Preparing ${REF_PDBID} reference (waters kept)"
+    ( cd "$REF_DIR" && phenix.pdbtools "${CIFFILE}" output.file_name="${REF_PDBID}_final_waterkept.cif" > /dev/null 2>&1 )
+fi
+if [ ! -f "$WATERSTRIPPED_CIFFILE" ]; then
+    echo "Preparing ${REF_PDBID} reference (waters stripped)"
+    ( cd "$REF_DIR" && phenix.pdbtools "${CIFFILE}" remove="resname HOH" output.file_name="${REF_PDBID}_final_waterstripped.cif" > /dev/null 2>&1 )
 fi
 
 echo "================================================"
-echo "Refining ${PDBID} using ${REF_PDBID} as reference"
+echo "Refining ${PDBID} mtz using ${REF_PDBID} as starting model"
 echo "================================================"
 for tag in auto stripped; do
 # for tag in fixed auto stripped; do
-    EFF_CIFFILE=$CIFFILE
+    EFF_CIFFILE=$WATERKEPT_CIFFILE
     EFF_OUTPREFIX=${OUTPREFIX}_${tag}
     ORDERED_SOLVENT=""
     if [ "$tag" = "fixed" ]; then
         ORDERED_SOLVENT="ordered_solvent=false"
     elif [ "$tag" = "stripped" ]; then
-        EFF_CIFFILE=$STRIPPED_CIFFILE
+        EFF_CIFFILE=$WATERSTRIPPED_CIFFILE
     fi
     echo "Tag: ${tag}, cif stem: $(basename "${EFF_CIFFILE}" .cif), ordered_solvent: ${ORDERED_SOLVENT}"
     refine_dir="${OUT_DIR}/${PDBID}/${SUFFIX}_${tag}"

@@ -21,18 +21,24 @@ mkdir -p "$OUT_DIR"
 
 IDS=$(tr '[:upper:]' '[:lower:]' < "$PDBID_LIST" | awk 'NF')
 
-# Pass 1: strip waters from every reference once, up front. Cheap, and doing it
-# before the parallel matrix means no two jobs race to write the same file.
-echo "Stripping waters from all references"
+# Pass 1: prepare every reference once, up front. Cheap, and doing it before the
+# parallel matrix means no two jobs race to write the same file. phenix.pdbtools
+# re-emits the model without the deposited TLS metadata that phenix.refine asserts
+# on; running every reference through it gives auto/stripped/fixed a consistent
+# baseline. WATERKEPT feeds auto/fixed; WATERSTRIPPED additionally removes waters.
+echo "Preparing references and stripping waters"
 for REF_PDBID in $IDS; do
-    STRIPPED_DIR="${OUT_DIR}/${REF_PDBID}"
-    STRIPPED_CIFFILE="${STRIPPED_DIR}/${REF_PDBID}_final_waterstripped.cif"
-    if [ -f "$STRIPPED_CIFFILE" ]; then
-        continue
-    fi
+    REF_DIR="${OUT_DIR}/${REF_PDBID}"
     CIFFILE="${ALL_PDB_REDO_DIR}/${REF_PDBID}/${REF_PDBID}_final.cif"
-    mkdir -p "$STRIPPED_DIR"
-    ( cd "$STRIPPED_DIR" && phenix.pdbtools "${CIFFILE}" remove="resname HOH" output.suffix="_waterstripped" > /dev/null 2>&1 )
+    WATERKEPT_CIFFILE="${REF_DIR}/${REF_PDBID}_final_waterkept.cif"
+    WATERSTRIPPED_CIFFILE="${REF_DIR}/${REF_PDBID}_final_waterstripped.cif"
+    mkdir -p "$REF_DIR"
+    if [ ! -f "$WATERKEPT_CIFFILE" ]; then
+        ( cd "$REF_DIR" && phenix.pdbtools "$CIFFILE" output.file_name="${REF_PDBID}_final_waterkept.cif" > /dev/null 2>&1 )
+    fi
+    if [ ! -f "$WATERSTRIPPED_CIFFILE" ]; then
+        ( cd "$REF_DIR" && phenix.pdbtools "$CIFFILE" remove="resname HOH" output.file_name="${REF_PDBID}_final_waterstripped.cif" > /dev/null 2>&1 )
+    fi
 done
 
 # Pass 2: full N×N refinement matrix, JOBS refinements running at a time.
