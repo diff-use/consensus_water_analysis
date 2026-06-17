@@ -232,19 +232,27 @@ def _attach_muse(df: pd.DataFrame, muse_csv: Path) -> pd.DataFrame:
 
 
 def load_structure_waters(
-    cif_path: Path,
+    cif_path: Path | pdbx.CIFFile,
     json_path: Path | None = None,
     muse_csv: Path | None = None,
+    pdb_id: str | None = None,
 ) -> pd.DataFrame:
     """Load water O records from one CIF, optionally attaching EDIA and MUSE scores.
 
     Reads the CIF once with altloc='all'. EDIA and MUSE are joined while ins_code
     is still present, then ins_code is dropped before returning.
 
+    cif_path may be a Path or an already-loaded CIFFile (e.g. a phenix CIF
+    pre-cleaned via read_phenix_cif); pass pdb_id explicitly in the latter case.
+
     Columns: pdb_id, chain_id, res_id, altloc, x, y, z, b_factor, occupancy, edia[, muse_score]
     """
-    pdb_id = cif_path.stem.removesuffix("_final")
-    cf = pdbx.CIFFile.read(cif_path)
+    if isinstance(cif_path, Path):
+        pdb_id = pdb_id if pdb_id is not None else cif_path.stem.removesuffix("_final")
+        cf = pdbx.CIFFile.read(cif_path)
+    else:
+        cf = cif_path
+        pdb_id = pdb_id if pdb_id is not None else "structure"
     atoms = pdbx.get_structure(cf, model=1, altloc="all", extra_fields=["b_factor", "occupancy"])
     waters = atoms[water_oxygen_mask(atoms)]
 

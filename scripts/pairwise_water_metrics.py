@@ -7,8 +7,8 @@ Usage:
 
     # phenix mode — each original reference vs its cross-refinement predictors
     uv run scripts/pairwise_water_metrics.py --phenix [--ref-dir <dir>]
-                                             [--phenix-dir <dir>] [--variant V]
-                                             [--cutoff <Å>]
+                                             [--phenix-dir <dir> | --results-dir <dir>]
+                                             [--variant V] [--cutoff <Å>]
 
 Cohort mode: for every ordered pair (a, b) of cohort members, aligns b onto a
 (Cα Kabsch) and compares their water oxygens — a is the reference / ground truth,
@@ -38,7 +38,7 @@ from loguru import logger
 
 import config
 from cw.align import align_to_reference
-from cw.io import load_protein, load_structure_waters, parse_identity, read_cohort
+from cw.io import load_protein, load_structure_waters, parse_identity, read_cohort, read_phenix_cif
 from cw.metadata import max_cell_diff
 from cw.metrics import chamfer_distance, matched_precision_recall, precision_recall
 
@@ -92,6 +92,46 @@ def compute_pair_metrics(ref_coords, ref_protein, predictor_cif, predictor_coord
     metrics["matched_recall"] = mpr["recall"]
     metrics["chamfer"] = chamfer_distance(ref_coords, moved)
     return metrics
+
+
+def flat_predictors(phenix_dir: Path, variant: str) -> list[tuple[Path, str, str]]:
+    """Predictors from a flat dir of <mtz_source>_refined_by_<starting_model>_<variant>.cif."""
+    records = []
+    for cif_path in sorted(phenix_dir.glob(f"*_refined_by_*_{variant}.cif")):
+        mtz_source, starting_model, _ = parse_identity(cif_path.stem)
+        records.append((cif_path, mtz_source, starting_model))
+    return records
+
+
+def nested_predictors(results_dir: Path, variant: str) -> list[tuple[Path, str, str]]:
+    """Predictors from the phenix refinement_results tree, one dir per refinement:
+    <results_dir>/<mtz_source>/refined_by_<starting_model>_<variant>/<mtz_source>_refined_by_<starting_model>_<variant>_*.cif
+    """
+    records = []
+    for target_dir in sorted(p for p in results_dir.iterdir() if p.is_dir()):
+        mtz_source = target_dir.name
+        for refinement_dir in sorted(target_dir.glob(f"refined_by_*_{variant}")):
+            if not refinement_dir.is_dir():
+                continue
+            starting_model = refinement_dir.name[len("refined_by_") :].rsplit("_", 1)[0]
+            cifs = sorted(refinement_dir.glob(f"{mtz_source}_refined_by_{starting_model}_{variant}_*.cif"))
+            if cifs:
+                records.append((cifs[-1], mtz_source, starting_model))
+            else:
+                logger.warning(f"[{variant}] no refined CIF under {refinement_dir}")
+    return records
+
+
+def discover_variants(results_dir: Path) -> list[str]:
+    """Variants present in a refinement_results tree (from refined_by_*_<variant> dirs)."""
+    variants = set()
+    for target_dir in results_dir.iterdir():
+        if not target_dir.is_dir():
+            continue
+        for refinement_dir in target_dir.glob("refined_by_*"):
+            if refinement_dir.is_dir():
+                variants.add(refinement_dir.name.rsplit("_", 1)[-1])
+    return sorted(variants)
 
 
 def run_cohort(args) -> None:
@@ -158,23 +198,36 @@ def run_cohort(args) -> None:
 
 def run_phenix(args) -> None:
     ref_dir = args.ref_dir or Path(config.DATA_DIR) / "hewls_65" / "filtered_pdbs"
-    phenix_dir = args.phenix_dir or Path(config.DATA_DIR) / "hewls_65_subsampled_phenix" / "filtered_pdbs"
-    out_dir = phenix_dir.parent
-    variants = [args.variant] if args.variant else VARIANTS
 
-    logger.info(f"Reference dir: {ref_dir}")
-    logger.info(f"Phenix dir:    {phenix_dir}")
-    logger.info(f"Variants:      {variants}")
-    logger.info(f"Cutoff:        {args.cutoff} Å")
+    # Two predictor layouts: a flat dir of cleaned CIFs (--phenix-dir, legacy), or
+    # the nested refinement_results tree of raw phenix output (--results-dir). Raw
+    # CIFs are cleaned on the fly via read_phenix_cif so no filtered_pdbs dir is needed.
+    if args.results_dir:
+        results_dir = args.results_dir
+        out_dir = results_dir.parent
+        predictor_source_desc = results_dir
+        variants = [args.variant] if args.variant else discover_variants(results_dir)
+        nested = True
+    else:
+        phenix_dir = args.phenix_dir or Path(config.DATA_DIR) / "hewls_65_subsampled_phenix" / "filtered_pdbs"
+        out_dir = phenix_dir.parent
+        predictor_source_desc = phenix_dir
+        variants = [args.variant] if args.variant else VARIANTS
+        nested = False
+
+    logger.info(f"Reference dir:  {ref_dir}")
+    logger.info(f"Predictor dir:  {predictor_source_desc}")
+    logger.info(f"Variants:       {variants}")
+    logger.info(f"Cutoff:         {args.cutoff} Å")
 
     for variant in variants:
-        files = sorted(phenix_dir.glob(f"*_refined_by_*_{variant}.cif"))
-        if not files:
-            logger.warning(f"[{variant}] no predictor CIFs found in {phenix_dir}")
+        records = nested_predictors(results_dir, variant) if nested else flat_predictors(phenix_dir, variant)
+        if not records:
+            logger.warning(f"[{variant}] no predictor CIFs found in {predictor_source_desc}")
             continue
 
         # Each reference's original protein + waters are loaded once and reused.
-        references = sorted({parse_identity(f.stem)[1] for f in files})
+        references = sorted({starting_model for _, _, starting_model in records})
         ref_cifs = {a: ref_dir / f"{a}.cif" for a in references}
         present = [a for a in references if ref_cifs[a].exists()]
         absent = [a for a in references if not ref_cifs[a].exists()]
@@ -186,13 +239,13 @@ def run_phenix(args) -> None:
         }
 
         rows = []
-        for f in files:
-            mtz_source, starting_model, _ = parse_identity(f.stem)
+        for cif_path, mtz_source, starting_model in records:
             if starting_model not in ref_proteins:
                 continue
-            pred_coords = load_structure_waters(f)[["x", "y", "z"]].to_numpy()
+            predictor = read_phenix_cif(cif_path) if nested else cif_path
+            pred_coords = load_structure_waters(predictor, pdb_id=mtz_source)[["x", "y", "z"]].to_numpy()
             metrics = compute_pair_metrics(
-                ref_coords[starting_model], ref_proteins[starting_model], f, pred_coords, args.cutoff
+                ref_coords[starting_model], ref_proteins[starting_model], predictor, pred_coords, args.cutoff
             )
             rows.append(
                 {
@@ -244,7 +297,16 @@ def main() -> None:
         type=Path,
         default=None,
         metavar="DIR",
-        help="(phenix) refined CIF dir (default: DATA_DIR/hewls_65_subsampled_phenix/filtered_pdbs)",
+        help="(phenix) flat refined CIF dir (default: DATA_DIR/hewls_65_subsampled_phenix/filtered_pdbs)",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="(phenix) nested refinement_results tree; overrides --phenix-dir. Raw phenix "
+        "CIFs are read straight from here and cleaned on the fly (no filtered_pdbs needed). "
+        "Output CSVs go to its parent dir.",
     )
     parser.add_argument(
         "--variant",
