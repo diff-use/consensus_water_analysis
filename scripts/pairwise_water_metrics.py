@@ -5,9 +5,15 @@ Usage:
     uv run scripts/pairwise_water_metrics.py <cohort.txt> [--input-dir <dir>]
                                              [--cutoff <Å>] [-o <csv>]
 
-    # phenix mode — each original reference vs its cross-refinement predictors
+    # phenix mode — each reference vs its cross-refinement predictors
     uv run scripts/pairwise_water_metrics.py --phenix [--ref-dir <dir>]
                                              [--phenix-dir <dir> | --results-dir <dir>]
+                                             [--ref-from-self-refined]
+                                             [--variant V] [--cutoff <Å>]
+
+    # self-refined mode — re-refined reference: every ordered pair of the
+    # self-refined diagonal structures (<X>_refined_by_<X>_<variant>)
+    uv run scripts/pairwise_water_metrics.py --self-refined --results-dir <dir>
                                              [--variant V] [--cutoff <Å>]
 
 Cohort mode: for every ordered pair (a, b) of cohort members, aligns b onto a
@@ -15,9 +21,16 @@ Cohort mode: for every ordered pair (a, b) of cohort members, aligns b onto a
 b the predicted set. One row per ordered pair → data/<cohort_id>/pairwise_metrics_{cutoff}.csv.
 
 Phenix mode: for refinement variant V and entry (reference a, predictor b), the
-reference is a's original waters (ref-dir/<a>.cif) and the predictor is
-<b>_refined_by_<a>_<V>.cif (phenix-dir). Aligns each predictor onto its reference
-and compares. One CSV per variant → data/hewls_65_subsampled_phenix/phenix_pairwise_metrics_{V}_{cutoff}.csv.
+predictor is <b>_refined_by_<a>_<V>.cif (phenix-dir). The reference (ground truth)
+is a's original waters (ref-dir/<a>.cif) by default, or — with --ref-from-self-refined
+— a's self-refinement <a>_refined_by_<a>_<V>, which keeps the section-B re-refined Δ
+clean (ground truth fixed). Aligns each predictor onto its reference and compares.
+One CSV per variant → data/hewls_65_subsampled_phenix/phenix_pairwise_metrics[_selfref]_{V}_{cutoff}.csv.
+
+Self-refined mode: a re-refined alternative to the cohort reference. For variant V
+and ordered pair (a, b), the reference is <a>_refined_by_<a>_<V> and the predictor
+is <b>_refined_by_<b>_<V> — i.e. both structures refined against their own model.
+Output uses the same columns as cohort mode → self_refined_pairwise_metrics_{V}_{cutoff}.csv.
 
 Both modes: precision/recall/f1 (many-to-one), matched precision/recall
 (one-to-one) and chamfer distance. The cutoff is applied uniformly, so it lives in
@@ -134,6 +147,45 @@ def discover_variants(results_dir: Path) -> list[str]:
     return sorted(variants)
 
 
+def all_pairs_rows(ids, proteins, coords, cells, mobile_cifs, cutoff, tag="") -> list[dict]:
+    """Compute metrics for every ordered pair (ref, mobile) drawn from `ids`.
+
+    proteins/coords/cells are {id: value} loaded once per structure; mobile_cifs
+    is {id: cif} where cif is whatever compute_pair_metrics' alignment accepts (a
+    Path, or an in-memory CIFFile for cleaned phenix output). Returns rows in the
+    FIELDNAMES schema. `tag` only prefixes the per-pair log lines.
+    """
+    prefix = f"[{tag}] " if tag else ""
+    rows = []
+    for structure_ref in ids:
+        for structure_mobile in ids:
+            metrics = compute_pair_metrics(
+                coords[structure_ref],
+                proteins[structure_ref],
+                mobile_cifs[structure_mobile],
+                coords[structure_mobile],
+                cutoff,
+            )
+            rows.append(
+                {
+                    "structure_ref": structure_ref,
+                    "structure_mobile": structure_mobile,
+                    "n_water_ref": len(coords[structure_ref]),
+                    "n_water_mobile": len(coords[structure_mobile]),
+                    **metrics,
+                    "max_cell_diff": max_cell_diff(cells[structure_ref], cells[structure_mobile]),
+                }
+            )
+            if np.isnan(metrics["n_common_ca"]):
+                logger.warning(f"  {prefix}ref {structure_ref} <- mobile {structure_mobile}: alignment skipped (too few common Cα)")
+            else:
+                logger.info(
+                    f"  {prefix}ref {structure_ref} <- mobile {structure_mobile}: "
+                    f"P={metrics['precision']:.3f} R={metrics['recall']:.3f} CD={metrics['chamfer']:.3f}"
+                )
+    return rows
+
+
 def run_cohort(args) -> None:
     cohort_path: Path = args.cohort
     if cohort_path is None or not cohort_path.exists():
@@ -165,35 +217,67 @@ def run_cohort(args) -> None:
     }
     cells = {pdb_id: gemmi.read_structure(str(cif_paths[pdb_id])).cell for pdb_id in found}
 
-    rows = []
-    for structure_ref in found:
-        for structure_mobile in found:
-            metrics = compute_pair_metrics(
-                coords[structure_ref],
-                proteins[structure_ref],
-                cif_paths[structure_mobile],
-                coords[structure_mobile],
-                args.cutoff,
-            )
-            rows.append(
-                {
-                    "structure_ref": structure_ref,
-                    "structure_mobile": structure_mobile,
-                    "n_water_ref": len(coords[structure_ref]),
-                    "n_water_mobile": len(coords[structure_mobile]),
-                    **metrics,
-                    "max_cell_diff": max_cell_diff(cells[structure_ref], cells[structure_mobile]),
-                }
-            )
-            if np.isnan(metrics["n_common_ca"]):
-                logger.warning(f"  ref {structure_ref} <- mobile {structure_mobile}: alignment skipped (too few common Cα)")
-            else:
-                logger.info(
-                    f"  ref {structure_ref} <- mobile {structure_mobile}: "
-                    f"P={metrics['precision']:.3f} R={metrics['recall']:.3f} CD={metrics['chamfer']:.3f}"
-                )
-
+    rows = all_pairs_rows(found, proteins, coords, cells, cif_paths, args.cutoff)
     _write_csv(out_path, FIELDNAMES, rows)
+
+
+def self_refined_cifs(results_dir: Path, variant: str) -> dict[str, Path]:
+    """{structure -> <X>_refined_by_<X>_<variant> CIF} — the diagonal of the
+    cross-refinement tree (each structure's data refined against its own model).
+    """
+    out: dict[str, Path] = {}
+    for target_dir in sorted(p for p in results_dir.iterdir() if p.is_dir()):
+        s = target_dir.name
+        refinement_dir = target_dir / f"refined_by_{s}_{variant}"
+        if not refinement_dir.is_dir():
+            continue
+        cifs = sorted(refinement_dir.glob(f"{s}_refined_by_{s}_{variant}_*.cif"))
+        if cifs:
+            out[s] = cifs[-1]
+        else:
+            logger.warning(f"[{variant}] no self-refined CIF under {refinement_dir}")
+    return out
+
+
+def run_self_refined(args) -> None:
+    """Re-refined reference: pairwise metrics among the self-refined structures
+    (<X>_refined_by_<X>_<variant>), one CSV per variant. Same FIELDNAMES schema as
+    the cohort reference, so it is a drop-in alternative baseline to compare the
+    cross-refinement matrices against."""
+    results_dir: Path = args.results_dir
+    if results_dir is None or not results_dir.is_dir():
+        logger.error(f"--self-refined needs --results-dir pointing at a refinement_results tree: {results_dir}")
+        sys.exit(1)
+
+    out_dir = results_dir.parent
+    variants = [args.variant] if args.variant else discover_variants(results_dir)
+    logger.info(f"Results dir: {results_dir}")
+    logger.info(f"Variants:    {variants}")
+    logger.info(f"Cutoff:      {args.cutoff} Å")
+
+    for variant in variants:
+        cif_paths = self_refined_cifs(results_dir, variant)
+        if not cif_paths:
+            logger.warning(f"[{variant}] no self-refined CIFs found under {results_dir}")
+            continue
+        ids = sorted(cif_paths)
+
+        # Raw phenix CIFs are cleaned on the fly; the cleaned CIFFile is reused as
+        # both the alignment reference (via load_protein) and the mobile.
+        cleaned = {s: read_phenix_cif(cif_paths[s]) for s in ids}
+        proteins = {s: load_protein(cleaned[s])[0] for s in ids}
+        coords = {
+            s: load_structure_waters(cleaned[s], pdb_id=s)[["x", "y", "z"]].to_numpy() for s in ids
+        }
+        cells = {s: gemmi.read_structure(str(cif_paths[s])).cell for s in ids}
+
+        rows = all_pairs_rows(ids, proteins, coords, cells, cleaned, args.cutoff, tag=variant)
+        out_path = (
+            args.output
+            if (args.output and len(variants) == 1)
+            else out_dir / f"self_refined_pairwise_metrics_{variant}_{args.cutoff}.csv"
+        )
+        _write_csv(out_path, FIELDNAMES, rows)
 
 
 def run_phenix(args) -> None:
@@ -215,7 +299,8 @@ def run_phenix(args) -> None:
         variants = [args.variant] if args.variant else VARIANTS
         nested = False
 
-    logger.info(f"Reference dir:  {ref_dir}")
+    ref_source = "self-refined <a>_refined_by_<a>" if args.ref_from_self_refined else f"deposited {ref_dir}"
+    logger.info(f"Reference:      {ref_source}")
     logger.info(f"Predictor dir:  {predictor_source_desc}")
     logger.info(f"Variants:       {variants}")
     logger.info(f"Cutoff:         {args.cutoff} Å")
@@ -226,16 +311,29 @@ def run_phenix(args) -> None:
             logger.warning(f"[{variant}] no predictor CIFs found in {predictor_source_desc}")
             continue
 
-        # Each reference's original protein + waters are loaded once and reused.
+        # Each reference's protein + waters are loaded once and reused. By default
+        # the reference is the original deposited structure (ref_dir/<a>.cif); with
+        # --ref-from-self-refined it is the self-refinement <a>_refined_by_<a>_<variant>,
+        # so a re-refined-reference Δ in section B holds the ground truth fixed.
         references = sorted({starting_model for _, _, starting_model in records})
-        ref_cifs = {a: ref_dir / f"{a}.cif" for a in references}
-        present = [a for a in references if ref_cifs[a].exists()]
-        absent = [a for a in references if not ref_cifs[a].exists()]
+        if args.ref_from_self_refined:
+            if nested:
+                ref_srcs = self_refined_cifs(results_dir, variant)
+                ref_clean = True  # raw phenix CIFs, clean on the fly
+            else:
+                ref_srcs = {a: phenix_dir / f"{a}_refined_by_{a}_{variant}.cif" for a in references}
+                ref_clean = False  # flat dir already holds cleaned CIFs
+        else:
+            ref_srcs = {a: ref_dir / f"{a}.cif" for a in references}
+            ref_clean = False
+        present = [a for a in references if a in ref_srcs and ref_srcs[a].exists()]
+        absent = [a for a in references if a not in present]
         if absent:
             logger.warning(f"[{variant}] missing reference CIFs (skipped): {absent}")
-        ref_proteins = {a: load_protein(ref_cifs[a])[0] for a in present}
+        ref_objs = {a: (read_phenix_cif(ref_srcs[a]) if ref_clean else ref_srcs[a]) for a in present}
+        ref_proteins = {a: load_protein(ref_objs[a])[0] for a in present}
         ref_coords = {
-            a: load_structure_waters(ref_cifs[a])[["x", "y", "z"]].to_numpy() for a in present
+            a: load_structure_waters(ref_objs[a], pdb_id=a)[["x", "y", "z"]].to_numpy() for a in present
         }
 
         rows = []
@@ -264,10 +362,11 @@ def run_phenix(args) -> None:
                     f"P={metrics['precision']:.3f} R={metrics['recall']:.3f} CD={metrics['chamfer']:.3f}"
                 )
 
+        _kind = "phenix_pairwise_metrics_selfref" if args.ref_from_self_refined else "phenix_pairwise_metrics"
         out_path = (
             args.output
             if (args.output and len(variants) == 1)
-            else out_dir / f"phenix_pairwise_metrics_{variant}_{args.cutoff}.csv"
+            else out_dir / f"{_kind}_{variant}_{args.cutoff}.csv"
         )
         _write_csv(out_path, PHENIX_FIELDNAMES, rows)
 
@@ -285,6 +384,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Pairwise water-set agreement metrics.")
     parser.add_argument("cohort", type=Path, nargs="?", help="Cohort .txt file (cohort mode)")
     parser.add_argument("--phenix", action="store_true", help="Phenix cross-refinement mode")
+    parser.add_argument(
+        "--self-refined",
+        dest="self_refined",
+        action="store_true",
+        help="Re-refined reference mode: pairwise metrics among the self-refined "
+        "diagonal CIFs (<X>_refined_by_<X>_<variant>). Needs --results-dir; one CSV "
+        "per variant → self_refined_pairwise_metrics_<variant>_<cutoff>.csv.",
+    )
     parser.add_argument(
         "--ref-dir",
         type=Path,
@@ -307,6 +414,14 @@ def main() -> None:
         help="(phenix) nested refinement_results tree; overrides --phenix-dir. Raw phenix "
         "CIFs are read straight from here and cleaned on the fly (no filtered_pdbs needed). "
         "Output CSVs go to its parent dir.",
+    )
+    parser.add_argument(
+        "--ref-from-self-refined",
+        dest="ref_from_self_refined",
+        action="store_true",
+        help="(phenix) use the self-refinement <a>_refined_by_<a>_<variant> as the "
+        "ground-truth reference instead of ref-dir/<a>.cif, so a re-refined-reference "
+        "Δ holds the ground truth fixed. Output → phenix_pairwise_metrics_selfref_<variant>_<cutoff>.csv.",
     )
     parser.add_argument(
         "--variant",
@@ -343,7 +458,9 @@ def main() -> None:
     level = "DEBUG" if args.verbose else "WARNING" if args.quiet else "INFO"
     logger.add(sys.stderr, level=level)
 
-    if args.phenix:
+    if args.self_refined:
+        run_self_refined(args)
+    elif args.phenix:
         run_phenix(args)
     else:
         run_cohort(args)
