@@ -13,6 +13,7 @@ usage() {
     echo "usage: $(basename "$0") <pdb_list.txt> <fixed|auto|stripped> <meta_out.csv>" >&2
     echo "  DATA_DIR env overrides the data root (default: $DATA_DIR)" >&2
     echo "  COHORT_ID env overrides the cohort name (default: <pdb_list> basename)" >&2
+    echo "  STRATEGY env selects the refinement tree: rigid|default (default: default)" >&2
     exit 1
 }
 
@@ -22,7 +23,9 @@ txt="$1"; variant="$2"; out="$3"
 case "$variant" in fixed|auto|stripped) ;; *) echo "error: variant must be fixed, auto, or stripped" >&2; exit 1;; esac
 
 COHORT_ID="${COHORT_ID:-$(basename "$txt" .txt)}"
-RESULTS_DIR="$DATA_DIR/${COHORT_ID}_phenix/refinement_results"
+STRATEGY="${STRATEGY:-default}"
+case "$STRATEGY" in rigid|default) ;; *) echo "error: STRATEGY must be 'rigid' or 'default'" >&2; exit 1 ;; esac
+RESULTS_DIR="$DATA_DIR/${COHORT_ID}_${STRATEGY}_phenix/refinement_results"
 
 # PDB ids: last whitespace field of each non-empty line, lowercased (handles both
 # "3ATN" and "1\t3ATN" cohort formats).

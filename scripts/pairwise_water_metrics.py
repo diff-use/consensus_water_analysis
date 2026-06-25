@@ -1,41 +1,53 @@
 """Pairwise water-set agreement metrics between aligned structures.
 
+Every mode aligns a mobile/predictor structure onto a reference (Cα Kabsch) and
+compares their water oxygens, reporting precision/recall/f1 (many-to-one), matched
+precision/recall (one-to-one) and chamfer distance; cohort and self-refined output
+additionally carry rmsd_after + max_cell_diff. The cutoff is applied uniformly, so it
+lives in the filename rather than a column; a failed alignment leaves NaN.
+
+Raw phenix waters (phenix / self-refined modes) are symmetry-aware distance-filtered to
+within --filter-cutoff Å of protein before comparison — matching the deposited
+references — unless --no-filter is passed. Cohort mode reads already-filtered CIFs.
+
 Usage:
     # cohort mode — every ordered pair of cohort members
     uv run scripts/pairwise_water_metrics.py <cohort.txt> [--input-dir <dir>]
                                              [--cutoff <Å>] [-o <csv>]
 
-    # phenix mode — each reference vs its cross-refinement predictors
-    uv run scripts/pairwise_water_metrics.py --phenix [--ref-dir <dir>]
-                                             [--phenix-dir <dir> | --results-dir <dir>]
-                                             [--ref-from-self-refined]
-                                             [--variant V] [--cutoff <Å>]
-
-    # self-refined mode — re-refined reference: every ordered pair of the
-    # self-refined diagonal structures (<X>_refined_by_<X>_<variant>)
+    # self-refined mode — re-refined reference (self-refined diagonal pairs)
     uv run scripts/pairwise_water_metrics.py --self-refined --results-dir <dir>
-                                             [--variant V] [--cutoff <Å>]
+                                             [--variant V] [--cutoff <Å>] [--no-filter] [-o <csv>]
 
-Cohort mode: for every ordered pair (a, b) of cohort members, aligns b onto a
-(Cα Kabsch) and compares their water oxygens — a is the reference / ground truth,
-b the predicted set. One row per ordered pair → data/<cohort_id>/pairwise_metrics_{cutoff}.csv.
+    # phenix mode — each reference vs its cross-refinement predictors
+    uv run scripts/pairwise_water_metrics.py --phenix --results-dir <dir>
+                                             (--ref-dir <dir> | --ref-from-self-refined)
+                                             [--variant V] [--cutoff <Å>] [--no-filter] [-o <csv>]
 
-Phenix mode: for refinement variant V and entry (reference a, predictor b), the
-predictor is <b>_refined_by_<a>_<V>.cif (phenix-dir). The reference (ground truth)
-is a's original waters (ref-dir/<a>.cif) by default, or — with --ref-from-self-refined
-— a's self-refinement <a>_refined_by_<a>_<V>, which keeps the section-B re-refined Δ
-clean (ground truth fixed). Aligns each predictor onto its reference and compares.
-One CSV per variant → data/hewls_65_subsampled_phenix/phenix_pairwise_metrics[_selfref]_{V}_{cutoff}.csv.
+COHORT MODE — for every ordered pair (a, b) of cohort members, b is aligned onto a;
+a is the reference / ground truth, b the predicted set.
+    Input  (required): <cohort.txt>  — one PDB id per line.
+    Input  (CIFs):     --input-dir/<id>.cif   [default: data/<cohort_id>/filtered_pdbs/]
+    Output:            -o <csv>               [default: data/<cohort_id>/pairwise_metrics_<cutoff>.csv]
 
-Self-refined mode: a re-refined alternative to the cohort reference. For variant V
-and ordered pair (a, b), the reference is <a>_refined_by_<a>_<V> and the predictor
-is <b>_refined_by_<b>_<V> — i.e. both structures refined against their own model.
-Output uses the same columns as cohort mode → self_refined_pairwise_metrics_{V}_{cutoff}.csv.
+SELF-REFINED MODE — a re-refined alternative to the cohort reference. For variant V and
+ordered pair (a, b): reference <a>_refined_by_<a>_<V>, predictor <b>_refined_by_<b>_<V>
+(both refined against their own model). Same columns as cohort mode.
+    Input  (required): --results-dir <dir>  — a phenix refinement_results/ tree.
+    Output:            <results-dir parent>/self_refined_pairwise_metrics_<V>_<cutoff>.csv
+                       (one per variant; -o overrides only with a single --variant)
 
-Both modes: precision/recall/f1 (many-to-one), matched precision/recall
-(one-to-one) and chamfer distance. The cutoff is applied uniformly, so it lives in
-the filename rather than a column; a failed alignment leaves NaN in rmsd_after and
-the metric columns.
+PHENIX MODE — for variant V and entry (reference a, predictor b), the predictor is
+<b>_refined_by_<a>_<V>. The reference (ground truth) is a's deposited waters, or — with
+--ref-from-self-refined — a's self-refinement <a>_refined_by_<a>_<V>, which keeps the
+section-B re-refined Δ clean (ground truth fixed).
+    Input  (predictors, required): --results-dir <dir>  (nested refinement_results tree;
+                                   raw CIFs cleaned + distance-filtered on the fly)
+    Input  (reference, required):  --ref-dir <dir>  → deposited <dir>/<a>.cif
+                                   (e.g. data/<cohort>/filtered_pdbs/);
+                                   omit ONLY with --ref-from-self-refined.
+    Output:            <results-dir parent>/phenix_pairwise_metrics[_selfref]_<V>_<cutoff>.csv
+                       (one per variant; -o overrides only with a single --variant)
 """
 
 import argparse
@@ -45,13 +57,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import biotite.structure.io.pdbx as pdbx
 import gemmi
 import numpy as np
 from loguru import logger
 
 import config
 from cw.align import align_to_reference
-from cw.io import load_protein, load_structure_waters, parse_identity, read_cohort, read_phenix_cif
+from cw.filter import filter_by_distance
+from cw.io import (
+    load_protein,
+    load_structure_waters,
+    read_cohort,
+    read_phenix_cif,
+    water_oxygen_mask,
+)
 from cw.metadata import max_cell_diff
 from cw.metrics import chamfer_distance, matched_precision_recall, precision_recall
 
@@ -76,6 +96,25 @@ PHENIX_FIELDNAMES = [
     *[k for k in METRIC_FIELDS if k != "rmsd_after"],
 ]
 VARIANTS = ["auto", "fixed", "stripped"]
+
+
+def clean_phenix_waters(raw_path, pdb_id, *, distance_filter, filter_cutoff):
+    """Clean a raw phenix CIF and return (cleaned_cif, water_coords).
+
+    read_phenix_cif normalises the raw phenix output so biotite can read it. When
+    distance_filter, the waters are then symmetry-aware distance-filtered to within
+    filter_cutoff Å of protein (cw.filter.filter_by_distance, each structure's own
+    cell / space group) — matching how the deposited references were filtered — so
+    phenix-added solvent far from protein is dropped. Otherwise every water is kept.
+    """
+    cleaned = read_phenix_cif(raw_path)
+    if not distance_filter:
+        return cleaned, load_structure_waters(cleaned, pdb_id=pdb_id)[["x", "y", "z"]].to_numpy()
+    st = gemmi.read_structure(str(raw_path))
+    sg = st.find_spacegroup() or gemmi.SpaceGroup("P 1")
+    atoms = pdbx.get_structure(cleaned, model=1, altloc="all", extra_fields=["b_factor", "occupancy"])
+    filtered, *_ = filter_by_distance(atoms, st.cell, sg, filter_cutoff)
+    return cleaned, filtered.coord[water_oxygen_mask(filtered)].astype(float)
 
 
 def compute_pair_metrics(ref_coords, ref_protein, predictor_cif, predictor_coords, cutoff) -> dict:
@@ -105,15 +144,6 @@ def compute_pair_metrics(ref_coords, ref_protein, predictor_cif, predictor_coord
     metrics["matched_recall"] = mpr["recall"]
     metrics["chamfer"] = chamfer_distance(ref_coords, moved)
     return metrics
-
-
-def flat_predictors(phenix_dir: Path, variant: str) -> list[tuple[Path, str, str]]:
-    """Predictors from a flat dir of <mtz_source>_refined_by_<starting_model>_<variant>.cif."""
-    records = []
-    for cif_path in sorted(phenix_dir.glob(f"*_refined_by_*_{variant}.cif")):
-        mtz_source, starting_model, _ = parse_identity(cif_path.stem)
-        records.append((cif_path, mtz_source, starting_model))
-    return records
 
 
 def nested_predictors(results_dir: Path, variant: str) -> list[tuple[Path, str, str]]:
@@ -251,9 +281,11 @@ def run_self_refined(args) -> None:
 
     out_dir = results_dir.parent
     variants = [args.variant] if args.variant else discover_variants(results_dir)
+    distance_filter = not args.no_filter
     logger.info(f"Results dir: {results_dir}")
     logger.info(f"Variants:    {variants}")
     logger.info(f"Cutoff:      {args.cutoff} Å")
+    logger.info(f"Water filter: {f'on (≤ {args.filter_cutoff} Å to protein)' if distance_filter else 'off'}")
 
     for variant in variants:
         cif_paths = self_refined_cifs(results_dir, variant)
@@ -262,13 +294,15 @@ def run_self_refined(args) -> None:
             continue
         ids = sorted(cif_paths)
 
-        # Raw phenix CIFs are cleaned on the fly; the cleaned CIFFile is reused as
-        # both the alignment reference (via load_protein) and the mobile.
-        cleaned = {s: read_phenix_cif(cif_paths[s]) for s in ids}
+        # Raw phenix CIFs are cleaned (and their waters distance-filtered unless
+        # --no-filter) on the fly; the cleaned CIFFile is reused as both the alignment
+        # reference (via load_protein) and the mobile.
+        cleaned, coords = {}, {}
+        for s in ids:
+            cleaned[s], coords[s] = clean_phenix_waters(
+                cif_paths[s], s, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
+            )
         proteins = {s: load_protein(cleaned[s])[0] for s in ids}
-        coords = {
-            s: load_structure_waters(cleaned[s], pdb_id=s)[["x", "y", "z"]].to_numpy() for s in ids
-        }
         cells = {s: gemmi.read_structure(str(cif_paths[s])).cell for s in ids}
 
         rows = all_pairs_rows(ids, proteins, coords, cells, cleaned, args.cutoff, tag=variant)
@@ -281,34 +315,38 @@ def run_self_refined(args) -> None:
 
 
 def run_phenix(args) -> None:
-    ref_dir = args.ref_dir or Path(config.DATA_DIR) / "hewls_65" / "filtered_pdbs"
+    # Original-grounded mode reads deposited reference CIFs from ref_dir/<a>.cif;
+    # --ref-from-self-refined instead reads references from the refinement tree.
+    if not args.ref_from_self_refined and args.ref_dir is None:
+        logger.error(
+            "--phenix (original-grounded) needs --ref-dir <cohort>/filtered_pdbs "
+            "(or pass --ref-from-self-refined to ground on the self-refinements)"
+        )
+        sys.exit(1)
+    ref_dir = args.ref_dir
 
-    # Two predictor layouts: a flat dir of cleaned CIFs (--phenix-dir, legacy), or
-    # the nested refinement_results tree of raw phenix output (--results-dir). Raw
-    # CIFs are cleaned on the fly via read_phenix_cif so no filtered_pdbs dir is needed.
-    if args.results_dir:
-        results_dir = args.results_dir
-        out_dir = results_dir.parent
-        predictor_source_desc = results_dir
-        variants = [args.variant] if args.variant else discover_variants(results_dir)
-        nested = True
-    else:
-        phenix_dir = args.phenix_dir or Path(config.DATA_DIR) / "hewls_65_subsampled_phenix" / "filtered_pdbs"
-        out_dir = phenix_dir.parent
-        predictor_source_desc = phenix_dir
-        variants = [args.variant] if args.variant else VARIANTS
-        nested = False
+    # Predictors come from the nested refinement_results tree of raw phenix output
+    # (--results-dir); each CIF is cleaned (read_phenix_cif) and its waters
+    # distance-filtered on the fly, so no pre-filtered dir is needed.
+    if args.results_dir is None or not args.results_dir.is_dir():
+        logger.error(f"--phenix needs --results-dir pointing at a refinement_results tree: {args.results_dir}")
+        sys.exit(1)
+    results_dir = args.results_dir
+    out_dir = results_dir.parent
+    variants = [args.variant] if args.variant else discover_variants(results_dir)
 
+    distance_filter = not args.no_filter
     ref_source = "self-refined <a>_refined_by_<a>" if args.ref_from_self_refined else f"deposited {ref_dir}"
     logger.info(f"Reference:      {ref_source}")
-    logger.info(f"Predictor dir:  {predictor_source_desc}")
+    logger.info(f"Predictor dir:  {results_dir}")
     logger.info(f"Variants:       {variants}")
     logger.info(f"Cutoff:         {args.cutoff} Å")
+    logger.info(f"Water filter:   {f'on (≤ {args.filter_cutoff} Å to protein)' if distance_filter else 'off'}")
 
     for variant in variants:
-        records = nested_predictors(results_dir, variant) if nested else flat_predictors(phenix_dir, variant)
+        records = nested_predictors(results_dir, variant)
         if not records:
-            logger.warning(f"[{variant}] no predictor CIFs found in {predictor_source_desc}")
+            logger.warning(f"[{variant}] no predictor CIFs found in {results_dir}")
             continue
 
         # Each reference's protein + waters are loaded once and reused. By default
@@ -317,12 +355,8 @@ def run_phenix(args) -> None:
         # so a re-refined-reference Δ in section B holds the ground truth fixed.
         references = sorted({starting_model for _, _, starting_model in records})
         if args.ref_from_self_refined:
-            if nested:
-                ref_srcs = self_refined_cifs(results_dir, variant)
-                ref_clean = True  # raw phenix CIFs, clean on the fly
-            else:
-                ref_srcs = {a: phenix_dir / f"{a}_refined_by_{a}_{variant}.cif" for a in references}
-                ref_clean = False  # flat dir already holds cleaned CIFs
+            ref_srcs = self_refined_cifs(results_dir, variant)
+            ref_clean = True  # raw phenix CIFs, clean + distance-filter on the fly
         else:
             ref_srcs = {a: ref_dir / f"{a}.cif" for a in references}
             ref_clean = False
@@ -330,18 +364,27 @@ def run_phenix(args) -> None:
         absent = [a for a in references if a not in present]
         if absent:
             logger.warning(f"[{variant}] missing reference CIFs (skipped): {absent}")
-        ref_objs = {a: (read_phenix_cif(ref_srcs[a]) if ref_clean else ref_srcs[a]) for a in present}
+        # ref_clean marks a raw self-refinement CIF (clean + distance-filter on the fly);
+        # a deposited reference is read as-is (already distance-filtered on disk).
+        ref_objs, ref_coords = {}, {}
+        for a in present:
+            if ref_clean:
+                ref_objs[a], ref_coords[a] = clean_phenix_waters(
+                    ref_srcs[a], a, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
+                )
+            else:
+                ref_objs[a] = ref_srcs[a]
+                ref_coords[a] = load_structure_waters(ref_srcs[a], pdb_id=a)[["x", "y", "z"]].to_numpy()
         ref_proteins = {a: load_protein(ref_objs[a])[0] for a in present}
-        ref_coords = {
-            a: load_structure_waters(ref_objs[a], pdb_id=a)[["x", "y", "z"]].to_numpy() for a in present
-        }
 
         rows = []
         for cif_path, mtz_source, starting_model in records:
             if starting_model not in ref_proteins:
                 continue
-            predictor = read_phenix_cif(cif_path) if nested else cif_path
-            pred_coords = load_structure_waters(predictor, pdb_id=mtz_source)[["x", "y", "z"]].to_numpy()
+            # Raw phenix output → clean + distance-filter on the fly.
+            predictor, pred_coords = clean_phenix_waters(
+                cif_path, mtz_source, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
+            )
             metrics = compute_pair_metrics(
                 ref_coords[starting_model], ref_proteins[starting_model], predictor, pred_coords, args.cutoff
             )
@@ -397,23 +440,17 @@ def main() -> None:
         type=Path,
         default=None,
         metavar="DIR",
-        help="(phenix) original reference CIF dir (default: DATA_DIR/hewls_65/filtered_pdbs)",
-    )
-    parser.add_argument(
-        "--phenix-dir",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help="(phenix) flat refined CIF dir (default: DATA_DIR/hewls_65_subsampled_phenix/filtered_pdbs)",
+        help="(phenix, original-grounded) deposited reference CIF dir <cohort>/filtered_pdbs; "
+        "required unless --ref-from-self-refined",
     )
     parser.add_argument(
         "--results-dir",
         type=Path,
         default=None,
         metavar="DIR",
-        help="(phenix) nested refinement_results tree; overrides --phenix-dir. Raw phenix "
-        "CIFs are read straight from here and cleaned on the fly (no filtered_pdbs needed). "
-        "Output CSVs go to its parent dir.",
+        help="(phenix/self-refined) nested refinement_results tree. Raw phenix CIFs are read "
+        "straight from here and cleaned + distance-filtered on the fly. Output CSVs go to its "
+        "parent dir.",
     )
     parser.add_argument(
         "--ref-from-self-refined",
@@ -441,6 +478,19 @@ def main() -> None:
         type=float,
         default=config.CLUSTER_MEMBER_RADIUS,
         help="Match distance in Å (default: config.CLUSTER_MEMBER_RADIUS)",
+    )
+    parser.add_argument(
+        "--filter-cutoff",
+        type=float,
+        default=config.WATER_PROT_DIST_CUTOFF,
+        metavar="Å",
+        help="(phenix/self-refined) water→protein distance cutoff for the on-the-fly filter "
+        f"of raw phenix waters (default: config.WATER_PROT_DIST_CUTOFF = {config.WATER_PROT_DIST_CUTOFF})",
+    )
+    parser.add_argument(
+        "--no-filter",
+        action="store_true",
+        help="(phenix/self-refined) skip the on-the-fly distance filter; compare every refined water as-is",
     )
     parser.add_argument(
         "-o",

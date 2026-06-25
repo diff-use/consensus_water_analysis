@@ -42,10 +42,37 @@ def _(mo):
     comes from `cw.plots` (`to_matrix`, `make_panels`, `order_by_count`,
     `diagonal_matrix`); nothing is redefined. Notebooks 05 and 06 are left untouched.
 
-    Generate the re-refined inputs with:
-    `... --self-refined --results-dir <cohort>_phenix/refinement_results` (agreement
-    reference) and `... --phenix --results-dir <...> --ref-from-self-refined`
-    (self-grounded phenix matrix).
+    **Inputs — order of operations.** One input file drives everything: a subset
+    PDB-id list `data/<cohort_subset>.txt` (`LIST` below). Set `CUTOFF` (e.g. = 1.4)
+    and `PHENIX_DIR` = `{DATA_DIR}/<cohort>_<strategy>_phenix` — the `STRATEGY`
+    (default `default`) is appended to the cohort name, and this dir must match the
+    **Phenix cohort dir** field. `<stem>` = the `PHENIX_DIR` basename without `_phenix`
+    (= the **Scalar meta-CSV stem** field). `REF_DIR` = the parent cohort's deposited
+    filtered CIFs, e.g. `{DATA_DIR}/hewls_65/filtered_pdbs`.
+
+    0. **Vet the subset — no refinement needed.** Pairwise Cα-RMSD + max cell-diff over
+       the *deposited (PDB-REDO)* structures, feeding the *Pairwise alignment* cell below:
+
+       `uv run scripts/pairwise_water_metrics.py <LIST> -o <PHENIX_DIR>/reference_pairwise_metrics.csv --cutoff <CUTOFF>`
+    1. **Refinement matrix** (heavy; Phenix env + deposited `.mtz` on disk):
+
+       `PDBID_LIST=<LIST> STRATEGY=default JOBS=4 bash scripts/phenix/re-refine_all.sh`
+       → writes `<PHENIX_DIR>/refinement_results/…`
+    2. **Section A scalars** (one CSV per variant):
+
+       `for v in auto stripped; do STRATEGY=default bash scripts/phenix/build_refinement_meta.sh <LIST> $v <PHENIX_DIR>/<stem>_$v.csv; done`
+
+       <br>_`STRATEGY` must match step 1 — `build_refinement_meta.sh` now derives `<cohort>_<strategy>_phenix` exactly like `re-refine_all.sh` (no manual `COHORT_ID`)._
+    3. **Section B agreement** (three families):
+
+       `uv run scripts/pairwise_water_metrics.py --phenix       --results-dir <PHENIX_DIR>/refinement_results --ref-dir <REF_DIR> --cutoff <CUTOFF>` ·
+
+       `uv run scripts/pairwise_water_metrics.py --self-refined --results-dir <PHENIX_DIR>/refinement_results --cutoff <CUTOFF>` ·
+
+       `uv run scripts/pairwise_water_metrics.py --phenix       --results-dir <PHENIX_DIR>/refinement_results --cutoff <CUTOFF> --ref-from-self-refined`
+    4. **`metadata.csv`** (water-count axis ordering + the *original* scalar baseline)
+       from Stage-1 `scripts/build_metadata.py`. Optional — axes fall back to sorted-id
+       order if it's missing.
     """)
     return
 
@@ -157,6 +184,8 @@ def _(mo):
     mo.md(r"""
     ## Pairwise alignment of the subsampled originals — RMSD + cell difference
 
+    _Needs: `reference_pairwise_metrics.csv` (step 0 — no refinement)._
+
     Independent of the phenix re-refinement: one combined heatmap over the
     subsampled *deposited* structures, read from `reference_pairwise_metrics.csv`.
     Both metrics are symmetric (`metric(a,b) == metric(b,a)`), so a single matrix
@@ -231,6 +260,8 @@ def _(
 def _(mo):
     mo.md(r"""
     ## Section A — scalar refinement metrics (`r_free`, `n_water`, `r_work`)
+
+    _Needs: `<stem>_<variant>.csv` (step 2) + `metadata.csv` (step 4, for the original baseline)._
 
     Per-structure scalar values across the re-refinement matrix. We establish the
     **baseline** each structure is measured against (deposited value, and the
@@ -508,6 +539,8 @@ def _(mo):
     mo.md(r"""
     ## Section B — water-set agreement (precision / recall / chamfer)
 
+    _Needs: the step-3 agreement CSVs (+ `reference_pairwise_metrics.csv` for the original reference)._
+
     Each cell `(row=a, col=b)` is how well predictor `b`'s waters agree with reference
     `a`'s, after Cα alignment. As in Section A we lead with the **reference** agreement
     and the per-structure **self-refinement diagonal**, then the full **phenix**
@@ -552,7 +585,7 @@ def _(METRICS, mo, sb_phenix, sb_ref_orig):
         if _d is not None:
             _cols |= set(_d.columns)
     _available = [k for k in METRICS if k in _cols] or list(METRICS)
-    _default = [k for k in ["precision", "recall", "chamfer"] if k in _available]
+    _default = [k for k in ["precision", "recall", "f1"] if k in _available]
     sb_metric_ui = mo.ui.multiselect(options=_available, value=_default, label="Agreement metrics → one panel each")
     sb_metric_ui
     return (sb_metric_ui,)
@@ -769,22 +802,41 @@ def _(
     )
     mo.stop(not sb_metric_ui.value, mo.md("Select at least one agreement metric above."))
 
-    _rows = []
+    # First pass: build every variant's Δ matrices. Second pass renders them — but the
+    # colour range is resolved per metric ACROSS variants, so the same metric (e.g.
+    # Δ precision) shares one symmetric scale for auto vs stripped.
+    _per_variant = []
     for _v in variant_ui.value:
         if _v not in _phx_src:
             continue
         _ref = sb_ref_orig if _orig else sb_selfref.get(_v)
         if _ref is None:
-            _rows.append(mo.md(f"_`{_v}`: baseline ({baseline_ui.value}) reference missing._"))
+            _per_variant.append((_v, None))
             continue
-        _diffs, _specs = {}, {}
+        _diffs = {}
         for _k in sb_metric_ui.value:
             _phx = to_matrix(_phx_src[_v], _k, sb_order, index="reference", columns="predictor")
             _rm = to_matrix(_ref, _k, sb_order, index="structure_ref", columns="structure_mobile")
-            _d = _phx - _rm
-            _diffs[_k] = _d
-            _lim = float(np.nanmax(np.abs(_d.to_numpy()))) or 1.0
-            _specs[_k] = {"label": f"Δ {_k}", "cmap": "coolwarm", "vmin": -_lim, "vmax": _lim}
+            _diffs[_k] = _phx - _rm
+        _per_variant.append((_v, _diffs))
+
+    # Per-metric symmetric limit = max |Δ| over all variants that have data.
+    _present = [d for _, d in _per_variant if d is not None]
+    _specs = {}
+    for _k in sb_metric_ui.value:
+        _lims = [
+            float(np.nanmax(np.abs(d[_k].to_numpy())))
+            for d in _present
+            if np.isfinite(d[_k].to_numpy()).any()
+        ]
+        _lim = (max(_lims) if _lims else 1.0) or 1.0
+        _specs[_k] = {"label": f"Δ {_k}", "cmap": "coolwarm", "vmin": -_lim, "vmax": _lim}
+
+    _rows = []
+    for _v, _diffs in _per_variant:
+        if _diffs is None:
+            _rows.append(mo.md(f"_`{_v}`: baseline ({baseline_ui.value}) reference missing._"))
+            continue
         _rows.append(mo.vstack([
             mo.md(f"**Δ `{_v}`  (phenix − {baseline_ui.value}, ground truth fixed)**"),
             make_panels(_diffs, specs=_specs, fmt="+.2f", mask_diagonal=not _orig, xlabel="mtz used to re-refine", ylabel="starting model"),
