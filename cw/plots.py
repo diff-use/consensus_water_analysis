@@ -79,6 +79,16 @@ def to_matrix(df, value_col, row_order, col_order=None, *, index, columns):
     return m.reindex(index=row_order, columns=col_order if col_order is not None else row_order)
 
 
+def diagonal_matrix(series, order) -> pd.DataFrame:
+    """Square `order` x `order` matrix, NaN everywhere but the leading diagonal,
+    which is filled from `series` reindexed to `order`. The off-diagonal NaNs
+    render blank under seaborn, so a heatmap of this shows only self-comparisons."""
+    order = list(order)
+    arr = np.full((len(order), len(order)), np.nan)
+    np.fill_diagonal(arr, pd.Series(series).reindex(order).to_numpy(dtype=float))
+    return pd.DataFrame(arr, index=order, columns=order)
+
+
 def shared_range(matrices, center=None):
     """Common (vmin, vmax) across a {label: matrix} dict; symmetric about
     `center` when given."""
@@ -134,7 +144,7 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
         for ax, (key, m) in zip(axs, matrices.items()):
             spec = specs[key]
             draw_heatmap(
-                m, ax, title=spec["label"], cbar_label=spec["label"],
+                m, ax, title=spec["label"], cbar_label=spec.get("cbar_label", spec["label"]),
                 cmap=spec["cmap"], vmin=spec.get("vmin"), vmax=spec.get("vmax"),
                 annot=annot, fmt=fmt, mask_diagonal=mask_diagonal,
                 xlabel=xlabel, ylabel=ylabel,
