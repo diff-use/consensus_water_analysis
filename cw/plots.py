@@ -74,8 +74,16 @@ def order_by_count(ids, counts: pd.Series) -> list:
 
 def to_matrix(df, value_col, row_order, col_order=None, *, index, columns):
     """Pivot a long df to an `index` x `columns` matrix of `value_col`, reindexed
-    to the given order(s). col_order defaults to row_order (square matrix)."""
-    m = df.pivot_table(index=index, columns=columns, values=value_col)
+    to the given order(s). col_order defaults to row_order (square matrix).
+
+    Duplicate (index, columns) pairs are an error (e.g. a re-refinement leaving two
+    CIFs in one dir): pivot with aggfunc="first" so a stray duplicate fails loud here
+    rather than being silently averaged into the cell.
+    """
+    dup = df.duplicated(subset=[index, columns]).any()
+    if dup:
+        raise ValueError(f"to_matrix: duplicate ({index}, {columns}) pairs for {value_col!r}")
+    m = df.pivot_table(index=index, columns=columns, values=value_col, aggfunc="first")
     return m.reindex(index=row_order, columns=col_order if col_order is not None else row_order)
 
 

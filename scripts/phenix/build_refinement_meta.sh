@@ -34,7 +34,7 @@ while IFS= read -r id; do ids+=("$id"); done < <(awk 'NF {print tolower($NF)}' "
 [ "${#ids[@]}" -gt 0 ] || { echo "error: no pdb ids found in $txt" >&2; exit 1; }
 
 mkdir -p "$(dirname "$out")"
-echo "target_pdb,ref_pdb,variant,r_work,r_free,n_water" > "$out"
+echo "mtz_source,starting_model,variant,r_work,r_free,n_water" > "$out"
 
 found=0; skipped=0
 for a in "${ids[@]}"; do

@@ -287,7 +287,7 @@ def _(Path, meta_stem_ui, pd, phenix_dir_ui, variant_ui):
 @app.cell
 def _(mo, sa_df):
     mo.stop(sa_df is None, mo.md("No scalar meta CSVs found for the selected variants — check the cohort dir / stem above."))
-    _key_cols = {"target_pdb", "ref_pdb", "variant"}
+    _key_cols = {"mtz_source", "starting_model", "variant"}
     _metrics = [c for c in sa_df.columns if c not in _key_cols]
     sa_metric_ui = mo.ui.dropdown(
         options=_metrics,
@@ -300,7 +300,7 @@ def _(mo, sa_df):
 
 @app.cell
 def _(order_by_count, sa_df, water_counts):
-    _ids = sorted(set(sa_df["target_pdb"]) | set(sa_df["ref_pdb"]))
+    _ids = sorted(set(sa_df["mtz_source"]) | set(sa_df["starting_model"]))
     sa_order = order_by_count(_ids, water_counts)
     return (sa_order,)
 
@@ -347,7 +347,7 @@ def _(
     for _v in variant_ui.value:
         _d = sa_df[sa_df["variant"] == _v]
         _cols[f"re-refined ({_v})"] = (
-            _d[_d["target_pdb"] == _d["ref_pdb"]].set_index("target_pdb")[_metric].reindex(sa_order)
+            _d[_d["mtz_source"] == _d["starting_model"]].set_index("mtz_source")[_metric].reindex(sa_order)
         )
 
     _active = ["original"] if baseline_ui.value == "original" else [f"re-refined ({_v})" for _v in variant_ui.value]
@@ -419,8 +419,8 @@ def _(
     }
     for _v in variant_ui.value:
         _self = (
-            sa_df[(sa_df["variant"] == _v) & (sa_df["target_pdb"] == sa_df["ref_pdb"])]
-            .set_index("target_pdb")[_metric]
+            sa_df[(sa_df["variant"] == _v) & (sa_df["mtz_source"] == sa_df["starting_model"])]
+            .set_index("mtz_source")[_metric]
             .reindex(sa_order)
         )
         _delta = _self - _orig
@@ -438,7 +438,7 @@ def _(mo):
     mo.md(r"""
     ### Cross-refinement matrix
 
-    Rows = **starting model** (`ref_pdb`), columns = **mtz data used** (`target_pdb`),
+    Rows = **starting model** (`starting_model`), columns = **mtz data used** (`mtz_source`),
     both sorted by original water count. The leading diagonal is each structure's
     self-refinement (shown on its own above).
     """)
@@ -450,7 +450,7 @@ def _(make_panels, sa_df, sa_metric_ui, sa_order, to_matrix, variant_ui):
     _metric = sa_metric_ui.value
     _fmt = ".0f" if _metric == "n_water" else ".3f"
     _panels = {
-        v: to_matrix(sa_df[sa_df["variant"] == v], _metric, sa_order, index="ref_pdb", columns="target_pdb")
+        v: to_matrix(sa_df[sa_df["variant"] == v], _metric, sa_order, index="starting_model", columns="mtz_source")
         for v in variant_ui.value
     }
     make_panels(
@@ -466,7 +466,7 @@ def _(mo):
     ### Δ vs baseline (cross − baseline)
 
     The cross-refinement matrix minus the selected baseline, subtracted column-wise
-    (per mtz source / `target_pdb`):
+    (per mtz source / `mtz_source`):
 
     - **original** → deposited `metadata.csv` value of that structure (variant-independent).
     - **re-refined** → the self-refinement `<target>_refined_by_<target>` of the *same*
@@ -492,7 +492,7 @@ def _(
     to_matrix,
     variant_ui,
 ):
-    # Δ vs baseline, subtracted column-wise (per mtz source / target_pdb):
+    # Δ vs baseline, subtracted column-wise (per mtz source / mtz_source):
     #   original   → deposited metadata.csv value of that structure (variant-independent).
     #   re-refined → the self-refinement value <target>_refined_by_<target> of the *same*
     #                variant (= that variant's matrix diagonal for the column).
@@ -513,13 +513,13 @@ def _(
         # subtrahend would make pandas re-sort the columns, desyncing the axes).
         _subtrahend = {
             v: (
-                lambda d: d[d["target_pdb"] == d["ref_pdb"]].set_index("target_pdb")[_metric].reindex(sa_order)
+                lambda d: d[d["mtz_source"] == d["starting_model"]].set_index("mtz_source")[_metric].reindex(sa_order)
             )(sa_df[sa_df["variant"] == v])
             for v in variant_ui.value
         }
 
     _panels = {
-        v: to_matrix(sa_df[sa_df["variant"] == v], _metric, sa_order, index="ref_pdb", columns="target_pdb").sub(
+        v: to_matrix(sa_df[sa_df["variant"] == v], _metric, sa_order, index="starting_model", columns="mtz_source").sub(
             _subtrahend[v], axis=1
         )
         for v in variant_ui.value
@@ -537,7 +537,7 @@ def _(
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## Section B — water-set agreement (precision / recall / chamfer)
+    ## Section B — water-set agreement (precision / recall / f1)
 
     _Needs: the step-3 agreement CSVs (+ `reference_pairwise_metrics.csv` for the original reference)._
 
@@ -706,6 +706,80 @@ def _(
             make_panels(_panels, specs=METRICS, xlabel="", ylabel="self-re-refinement vs PDB-REDO"),
         ]))
     mo.vstack(_rows)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### Δ self-refinement vs PDB-REDO — full pairwise matrix
+
+    Generalizes the diagonal-only view above to **every pair**: cell `(a, b)` is
+    `metric(a_refined_by_a ↔ b_refined_by_b) − metric(original-a ↔ original-b)` —
+    the self-refined reference matrix (`self_refined_pairwise_metrics_<variant>`)
+    minus the original reference matrix (`reference_pairwise_metrics.csv`),
+    element-wise. Both sides are reference-vs-reference, so this isolates the effect
+    of phenix self-re-refinement on the **pairwise water agreement between two
+    structures**, off-diagonal included. The diagonal is 0 by construction (self vs
+    self is identical agreement on both sides) and is masked. One row of metric
+    panels per variant; diverging scale per metric, shared across variants. For
+    precision/recall/F1 a **positive** Δ (red) means the self-refined pair agrees
+    *better* than the deposited pair; for chamfer/RMSD positive = worse.
+    """)
+    return
+
+
+@app.cell
+def _(
+    make_panels,
+    mo,
+    np,
+    sb_metric_ui,
+    sb_order,
+    sb_ref_orig,
+    sb_selfref,
+    to_matrix,
+    variant_ui,
+):
+    mo.stop(sb_ref_orig is None, mo.md("_`reference_pairwise_metrics.csv` not found — original reference unavailable._"))
+    mo.stop(not sb_selfref, mo.md("_No `self_refined_pairwise_metrics_*` CSVs — re-refined reference unavailable (run `--self-refined`)._"))
+    mo.stop(not sb_metric_ui.value, mo.md("Select at least one agreement metric above."))
+
+    # Per-variant element-wise Δ: self-refined reference matrix − original reference
+    # matrix. Both indexed by structure_ref/structure_mobile, so the subtraction is
+    # cell-for-cell once each is reindexed to sb_order.
+    _orig = {
+        _k: to_matrix(sb_ref_orig, _k, sb_order, index="structure_ref", columns="structure_mobile")
+        for _k in sb_metric_ui.value
+    }
+    _per_variant = []
+    for _v in variant_ui.value:
+        if _v not in sb_selfref:
+            continue
+        _diffs = {
+            _k: to_matrix(sb_selfref[_v], _k, sb_order, index="structure_ref", columns="structure_mobile") - _orig[_k]
+            for _k in sb_metric_ui.value
+        }
+        _per_variant.append((_v, _diffs))
+
+    # Per-metric symmetric limit = max |Δ| across all variants present.
+    _specs = {}
+    for _k in sb_metric_ui.value:
+        _lims = [
+            float(np.nanmax(np.abs(d[_k].to_numpy())))
+            for _, d in _per_variant
+            if np.isfinite(d[_k].to_numpy()).any()
+        ]
+        _lim = (max(_lims) if _lims else 1.0) or 1.0
+        _specs[_k] = {"label": f"Δ {_k}", "cmap": "coolwarm", "vmin": -_lim, "vmax": _lim}
+
+    mo.vstack([
+        mo.vstack([
+            mo.md(f"**Δ `{_v}`  (self-refined ref − original ref, pairwise)**"),
+            make_panels(_diffs, specs=_specs, fmt="+.2f", mask_diagonal=True, xlabel="structure b", ylabel="structure a"),
+        ])
+        for _v, _diffs in _per_variant
+    ])
     return
 
 
