@@ -110,9 +110,9 @@ def _():
 
     # Agreement-metric registry (shared by section B panels): label / cmap / range.
     METRICS = {
-        "precision": {"label": "Precision", "cmap": "Blues", "vmin": 0, "vmax": 1},
-        "recall": {"label": "Recall (coverage)", "cmap": "Greens", "vmin": 0, "vmax": 1},
-        "f1": {"label": "F1", "cmap": "Purples", "vmin": 0, "vmax": 1},
+        "precision": {"label": "Precision", "cmap": "viridis", "vmin": 0, "vmax": 1},
+        "recall": {"label": "Recall (coverage)", "cmap": "viridis", "vmin": 0, "vmax": 1},
+        "f1": {"label": "F1", "cmap": "viridis", "vmin": 0, "vmax": 1},
         "matched_precision": {"label": "Matched precision", "cmap": "Blues", "vmin": 0, "vmax": 1},
         "matched_recall": {"label": "Matched recall", "cmap": "Greens", "vmin": 0, "vmax": 1},
         "chamfer": {"label": "Chamfer dist (Å)", "cmap": "rocket_r", "vmin": 0, "vmax": None},
@@ -623,6 +623,7 @@ def _(
     baseline_ui,
     make_panels,
     mo,
+    np,
     sb_metric_ui,
     sb_order,
     sb_ref_orig,
@@ -631,32 +632,44 @@ def _(
 ):
     mo.stop(not sb_metric_ui.value, mo.md("Select at least one agreement metric above."))
 
-    def _ref_panels(frame, mask_diag):
-        return make_panels(
-            {k: to_matrix(frame, k, sb_order, index="structure_ref", columns="structure_mobile") for k in sb_metric_ui.value},
-            specs=METRICS, mask_diagonal=mask_diag,
-            xlabel="predictor (mobile)", ylabel="ground truth (ref)",
-        )
+    def _ref_mats(frame):
+        return {k: to_matrix(frame, k, sb_order, index="structure_ref", columns="structure_mobile") for k in sb_metric_ui.value}
 
-    # Show every reference baseline regardless of the selector — original-vs-original
-    # and each per-variant self-refinement matrix — and ★-mark the one the Δ panels
-    # actually subtract (the active Δ baseline).
+    # Build every reference block's matrices up front — original-vs-original and each
+    # per-variant self-refinement matrix — so each metric's colorbar can be shared
+    # *vertically* (one range per metric column, across original + all variant blocks)
+    # instead of the fixed 0–1 in METRICS. ★-mark the one the Δ panels subtract.
     _orig_active = baseline_ui.value == "original"
+    _named = []  # (star, title, matrices)
+    if sb_ref_orig is not None:
+        _named.append(("★ " if _orig_active else "", "original reference — original-vs-original", _ref_mats(sb_ref_orig)))
+    for _v in sb_selfref:
+        _named.append(("" if _orig_active else "★ ", f"re-refined reference — `{_v}`", _ref_mats(sb_selfref[_v])))
+
+    # Per-metric shared (vmin, vmax) across all blocks, from the actual data range.
+    _specs = {}
+    for _k in sb_metric_ui.value:
+        _vals = np.concatenate([mats[_k].to_numpy().ravel() for _, _, mats in _named]) if _named else np.array([])
+        _vals = _vals[np.isfinite(_vals)]
+        _specs[_k] = {**METRICS[_k], "vmin": float(_vals.min()), "vmax": float(_vals.max())} if _vals.size else METRICS[_k]
+
+    def _ref_panels(mats):
+        return make_panels(mats, specs=_specs, mask_diagonal=True, xlabel="predictor (mobile)", ylabel="ground truth (ref)")
+
     _blocks = [mo.md(
         f"**Active Δ baseline: `{baseline_ui.value}`** — the ★-marked reference below is the "
         "one the Δ panels subtract; the other is shown for reference only."
     )]
 
-    _star = "★ " if _orig_active else ""
     if sb_ref_orig is not None:
-        _blocks.append(mo.vstack([mo.md(f"**{_star}original reference — original-vs-original**"), _ref_panels(sb_ref_orig, True)]))
+        _star, _title, _mats = _named[0]
+        _blocks.append(mo.vstack([mo.md(f"**{_star}{_title}**"), _ref_panels(_mats)]))
     else:
         _blocks.append(mo.md("_`reference_pairwise_metrics.csv` not found — original reference unavailable._"))
 
-    _star = "" if _orig_active else "★ "
     if sb_selfref:
-        for _v in sb_selfref:
-            _blocks.append(mo.vstack([mo.md(f"**{_star}re-refined reference — `{_v}`**"), _ref_panels(sb_selfref[_v], True)]))
+        for _star, _title, _mats in (_named[1:] if sb_ref_orig is not None else _named):
+            _blocks.append(mo.vstack([mo.md(f"**{_star}{_title}**"), _ref_panels(_mats)]))
     else:
         _blocks.append(mo.md("_No `self_refined_pairwise_metrics_*` CSVs — re-refined reference unavailable (run `--self-refined`)._"))
 
