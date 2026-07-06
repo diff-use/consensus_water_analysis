@@ -282,6 +282,33 @@ def load_structure_waters(
     return df.drop(columns=["ins_code"])
 
 
+def resolve_aligned_water_inputs(
+    member_ids: list[str],
+    aligned_dir: Path,
+    *,
+    edia_dir: Path | str,
+    edia_template: str,
+    muse_dir: Path | str,
+    muse_template: str,
+    cohort_id: str,
+) -> list[tuple[Path, Path | None, Path | None]]:
+    """Resolve (aligned_cif, edia_json, muse_csv) triples for members with an aligned CIF.
+
+    Members without an aligned CIF in aligned_dir are skipped, so the returned list length is
+    the count of members actually found. The edia / muse entry of a triple is None when that
+    score file is absent for the member. The result feeds straight into collect_aligned_waters.
+    """
+    pairs: list[tuple[Path, Path | None, Path | None]] = []
+    for member_id in member_ids:
+        cif = Path(aligned_dir) / f"{member_id}.cif"
+        if not cif.exists():
+            continue
+        edia = Path(edia_dir) / edia_template.format(pdb_id=member_id)
+        muse = Path(muse_dir) / muse_template.format(cohort=cohort_id, pdb_id=member_id)
+        pairs.append((cif, edia if edia.exists() else None, muse if muse.exists() else None))
+    return pairs
+
+
 def collect_aligned_waters(
     cif_json_pairs: list[tuple[Path, Path | None, Path | None]],
     *,

@@ -21,7 +21,12 @@ from cw.cluster import (
     find_clusters_too_close,
     run_hdbscan,
 )
-from cw.io import collect_aligned_waters, read_cohort, write_cluster_cif
+from cw.io import (
+    collect_aligned_waters,
+    read_cohort,
+    resolve_aligned_water_inputs,
+    write_cluster_cif,
+)
 
 
 def main() -> None:
@@ -100,25 +105,16 @@ def main() -> None:
 
     member_ids = read_cohort(cohort_path)
 
-    cif_json_pairs = []
-    n_muse = 0
-    for member_id in member_ids:
-        cif = aligned_dir / f"{member_id}.cif"
-        if not cif.exists():
-            continue
-        edia_path = Path(config.ALL_PDB_REDO_DIR) / config.EDIA_TEMPLATE.format(pdb_id=member_id)
-        muse_path = Path(config.MUSE_DIR) / config.MUSE_TEMPLATE.format(
-            cohort=cohort_id, pdb_id=member_id
-        )
-        if muse_path.exists():
-            n_muse += 1
-        cif_json_pairs.append(
-            (
-                cif,
-                edia_path if edia_path.exists() else None,
-                muse_path if muse_path.exists() else None,
-            )
-        )
+    cif_json_pairs = resolve_aligned_water_inputs(
+        member_ids,
+        aligned_dir,
+        edia_dir=config.ALL_PDB_REDO_DIR,
+        edia_template=config.EDIA_TEMPLATE,
+        muse_dir=config.MUSE_DIR,
+        muse_template=config.MUSE_TEMPLATE,
+        cohort_id=cohort_id,
+    )
+    n_muse = sum(1 for _, _, muse in cif_json_pairs if muse is not None)
 
     n_total = len(member_ids)
     n_found = len(cif_json_pairs)
