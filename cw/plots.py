@@ -3,6 +3,7 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 
 
 def plot_pr_scatter(
@@ -55,3 +56,122 @@ def plot_pr_scatter(
     if title:
         ax.set_title(title)
     return fig, ax
+
+
+# ── Heatmap toolkit ─────────────────────────────────────────────────────────
+# Shared by the refinement-matrix notebooks (scalar metrics like r_free / n_water
+# and pairwise water-set agreement). Both draw rows-of-panels of square matrices
+# whose axes are pdb ids sorted by water count, so the helpers below are kept
+# generic: build a {label: matrix} dict however you like and hand it to
+# make_panels. Notebooks 05 and 06 keep their own inline copies; new notebooks
+# should import from here instead of redefining.
+
+
+def order_by_count(ids, counts: pd.Series) -> list:
+    """Order ids by a count Series (ascending; ids missing from counts sort last)."""
+    return list(counts.reindex(list(ids)).sort_values().index)
+
+
+def to_matrix(df, value_col, row_order, col_order=None, *, index, columns):
+    """Pivot a long df to an `index` x `columns` matrix of `value_col`, reindexed
+    to the given order(s). col_order defaults to row_order (square matrix).
+
+    Duplicate (index, columns) pairs are an error (e.g. a re-refinement leaving two
+    CIFs in one dir): pivot with aggfunc="first" so a stray duplicate fails loud here
+    rather than being silently averaged into the cell.
+    """
+    dup = df.duplicated(subset=[index, columns]).any()
+    if dup:
+        raise ValueError(f"to_matrix: duplicate ({index}, {columns}) pairs for {value_col!r}")
+    m = df.pivot_table(index=index, columns=columns, values=value_col, aggfunc="first")
+    return m.reindex(index=row_order, columns=col_order if col_order is not None else row_order)
+
+
+def diagonal_matrix(series, order) -> pd.DataFrame:
+    """Square `order` x `order` matrix, NaN everywhere but the leading diagonal,
+    which is filled from `series` reindexed to `order`. The off-diagonal NaNs
+    render blank under seaborn, so a heatmap of this shows only self-comparisons."""
+    order = list(order)
+    arr = np.full((len(order), len(order)), np.nan)
+    np.fill_diagonal(arr, pd.Series(series).reindex(order).to_numpy(dtype=float))
+    return pd.DataFrame(arr, index=order, columns=order)
+
+
+def shared_range(matrices, center=None):
+    """Common (vmin, vmax) across a {label: matrix} dict; symmetric about
+    `center` when given."""
+    if center is not None:
+        radius = max((m - center).abs().max().max() for m in matrices.values())
+        return center - radius, center + radius
+    return (
+        min(m.min().min() for m in matrices.values()),
+        max(m.max().max() for m in matrices.values()),
+    )
+
+
+def draw_heatmap(matrix, ax, *, title="", cbar_label="", cmap="viridis", center=None,
+                 annot=True, fmt=".2f", vmin=None, vmax=None, cbar=True,
+                 mask_diagonal=False, xlabel="", ylabel=""):
+    """Draw one annotated, square seaborn heatmap onto `ax`.
+
+    mask_diagonal blanks the leading diagonal (self-comparisons) → NaN.
+    """
+    mask = np.eye(len(matrix), dtype=bool) if mask_diagonal else None
+    sns.heatmap(
+        matrix, ax=ax, cmap=cmap, center=center, annot=annot, fmt=fmt,
+        vmin=vmin, vmax=vmax, cbar=cbar, mask=mask,
+        square=True, linewidths=0.5, linecolor="white",
+        cbar_kws={"label": cbar_label, "shrink": 0.6},
+    )
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+
+def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=None,
+                annot=True, fmt=".2f", panel_size=4.0, shared_cbar=False,
+                mask_diagonal=False, xlabel="", ylabel=""):
+    """Render a {label: matrix} dict as a row of heatmap panels.
+
+    Two styling modes:
+
+    - `specs` given — a {label: {label, cmap, vmin, vmax}} registry drives each
+      panel's title/colour map/range individually (per-metric panels). `shared_cbar`
+      is ignored; each panel keeps its own colorbar.
+    - `specs` None — every panel uses the uniform `cmap`/`center`/`fmt` kwargs.
+      `shared_cbar=True` puts them all on one scale (symmetric about `center` when
+      given) with a single figure-level colorbar.
+
+    Returns the figure.
+    """
+    n = len(matrices)
+    fig, axes = plt.subplots(1, n, figsize=(panel_size * n, panel_size), squeeze=False)
+    axs = axes[0]
+
+    if specs is not None:
+        for ax, (key, m) in zip(axs, matrices.items()):
+            spec = specs[key]
+            draw_heatmap(
+                m, ax, title=spec["label"], cbar_label=spec.get("cbar_label", spec["label"]),
+                cmap=spec["cmap"], vmin=spec.get("vmin"), vmax=spec.get("vmax"),
+                annot=annot, fmt=fmt, mask_diagonal=mask_diagonal,
+                xlabel=xlabel, ylabel=ylabel,
+            )
+        fig.tight_layout()
+        return fig
+
+    vmin = vmax = None
+    if shared_cbar:
+        vmin, vmax = shared_range(matrices, center)
+    for ax, (label, m) in zip(axs, matrices.items()):
+        draw_heatmap(
+            m, ax, title=label, cbar_label=cbar_label, cmap=cmap, center=center,
+            annot=annot, fmt=fmt, vmin=vmin, vmax=vmax, cbar=not shared_cbar,
+            mask_diagonal=mask_diagonal, xlabel=xlabel, ylabel=ylabel,
+        )
+    if shared_cbar:
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        fig.colorbar(sm, ax=axs.tolist(), label=cbar_label, shrink=0.6)
+        return fig
+    fig.tight_layout()
+    return fig

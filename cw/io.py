@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
+import gemmi
 import numpy as np
 import pandas as pd
 
@@ -44,6 +46,27 @@ def read_cohort(txt_path: Path) -> list[str]:
 def cif_path_for(pdb_id: str, all_pdb_redo_dir: Path | str, cif_template: str) -> Path:
     """Resolve the CIF path for a PDB ID."""
     return Path(all_pdb_redo_dir) / cif_template.format(pdb_id=pdb_id)
+
+
+def parse_identity(identity: str) -> tuple[str, str, str]:
+    """Split '<mtz_source>_refined_by_<starting_model>_<variant>' into its three parts."""
+    mtz_source, rest = identity.split("_refined_by_", 1)
+    starting_model, variant = rest.rsplit("_", 1)
+    return mtz_source, starting_model, variant
+
+
+def read_phenix_cif(path: Path) -> pdbx.CIFFile:
+    """Read a phenix refinement CIF into a clean single-block biotite CIFFile.
+
+    Phenix output CIFs embed an `_atom_type` loop with multi-line (`;`-delimited)
+    text values that biotite 1.4's reader cannot parse — it silently drops
+    `atom_site` — and append monomer-restraint data blocks. gemmi parses them
+    fine, so round-tripping through gemmi's mmCIF writer yields a clean
+    single-block document biotite can read. Water altlocs and occupancies are
+    preserved through the round-trip.
+    """
+    st = gemmi.read_structure(str(path))
+    return pdbx.CIFFile.read(io.StringIO(st.make_mmcif_document().as_string()))
 
 
 def water_oxygen_mask(atoms: struc.AtomArray) -> np.ndarray:
@@ -209,19 +232,27 @@ def _attach_muse(df: pd.DataFrame, muse_csv: Path) -> pd.DataFrame:
 
 
 def load_structure_waters(
-    cif_path: Path,
+    cif_path: Path | pdbx.CIFFile,
     json_path: Path | None = None,
     muse_csv: Path | None = None,
+    pdb_id: str | None = None,
 ) -> pd.DataFrame:
     """Load water O records from one CIF, optionally attaching EDIA and MUSE scores.
 
     Reads the CIF once with altloc='all'. EDIA and MUSE are joined while ins_code
     is still present, then ins_code is dropped before returning.
 
+    cif_path may be a Path or an already-loaded CIFFile (e.g. a phenix CIF
+    pre-cleaned via read_phenix_cif); pass pdb_id explicitly in the latter case.
+
     Columns: pdb_id, chain_id, res_id, altloc, x, y, z, b_factor, occupancy, edia[, muse_score]
     """
-    pdb_id = cif_path.stem.removesuffix("_final")
-    cf = pdbx.CIFFile.read(cif_path)
+    if isinstance(cif_path, Path):
+        pdb_id = pdb_id if pdb_id is not None else cif_path.stem.removesuffix("_final")
+        cf = pdbx.CIFFile.read(cif_path)
+    else:
+        cf = cif_path
+        pdb_id = pdb_id if pdb_id is not None else "structure"
     atoms = pdbx.get_structure(cf, model=1, altloc="all", extra_fields=["b_factor", "occupancy"])
     waters = atoms[water_oxygen_mask(atoms)]
 
@@ -249,6 +280,33 @@ def load_structure_waters(
         df = _attach_muse(df, muse_csv)
 
     return df.drop(columns=["ins_code"])
+
+
+def resolve_aligned_water_inputs(
+    member_ids: list[str],
+    aligned_dir: Path,
+    *,
+    edia_dir: Path | str,
+    edia_template: str,
+    muse_dir: Path | str,
+    muse_template: str,
+    cohort_id: str,
+) -> list[tuple[Path, Path | None, Path | None]]:
+    """Resolve (aligned_cif, edia_json, muse_csv) triples for members with an aligned CIF.
+
+    Members without an aligned CIF in aligned_dir are skipped, so the returned list length is
+    the count of members actually found. The edia / muse entry of a triple is None when that
+    score file is absent for the member. The result feeds straight into collect_aligned_waters.
+    """
+    pairs: list[tuple[Path, Path | None, Path | None]] = []
+    for member_id in member_ids:
+        cif = Path(aligned_dir) / f"{member_id}.cif"
+        if not cif.exists():
+            continue
+        edia = Path(edia_dir) / edia_template.format(pdb_id=member_id)
+        muse = Path(muse_dir) / muse_template.format(cohort=cohort_id, pdb_id=member_id)
+        pairs.append((cif, edia if edia.exists() else None, muse if muse.exists() else None))
+    return pairs
 
 
 def collect_aligned_waters(

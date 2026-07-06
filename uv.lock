@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 
 [[package]]
@@ -227,6 +227,7 @@ dependencies = [
     { name = "biotite" },
     { name = "gemmi" },
     { name = "hdbscan" },
+    { name = "joblib" },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -253,6 +254,7 @@ requires-dist = [
     { name = "biotite" },
     { name = "gemmi" },
     { name = "hdbscan" },
+    { name = "joblib" },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "numpy" },

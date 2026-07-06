@@ -64,7 +64,7 @@ def _():
 
 @app.cell
 def _(Path, config, pd):
-    COHORT = "hewls_65"
+    COHORT = "carbonicanhydrase_000562" #"hewls_65"
     DATA = Path(config.DATA_DIR) / COHORT
     SUBSET = Path(config.DATA_DIR) / Path(COHORT + "_iso")
     if not SUBSET.exists():
@@ -76,7 +76,7 @@ def _(Path, config, pd):
 
     print(f"clusters rows:        {len(clusters)}")
     print(f"cluster_members rows: {len(cluster_members)}")
-    return cluster_members, clusters, metadata
+    return SUBSET, cluster_members, clusters, metadata
 
 
 @app.cell
@@ -184,6 +184,38 @@ def _(
 
 
 @app.cell
+def _(cluster_members):
+    cluster_members
+    return
+
+
+@app.cell
+def _(cluster_members, cluster_occupancy_cutoff, clusters):
+    consensus_mask = clusters["cluster_occupancy"] > cluster_occupancy_cutoff
+    nonconsensus_clusters = clusters[~consensus_mask]
+    consensus_cluster_ids = set(clusters.loc[consensus_mask, "cluster_id"])
+
+    n_structure = cluster_members["pdb_id"].nunique()
+    n_noise = int((cluster_members["cluster_id"] == -1).sum())
+
+    is_consensus_water = (
+        cluster_members["within_cutoff"]
+        & cluster_members["cluster_id"].isin(consensus_cluster_ids)
+    )
+    n_nonconsensus_water = int((~is_consensus_water).sum())
+    n_total_water = len(cluster_members)
+
+    print(
+        f"{len(nonconsensus_clusters)} non-consensus clusters out of {len(clusters)}: "
+        f"{len(nonconsensus_clusters) / len(clusters):.3f}"
+    )
+    print(f"{n_total_water} total waters from {n_structure} PDBs")
+    print(f"{n_noise} noise waters; {n_nonconsensus_water} non-consensus waters (incl. noise)")
+    print(f"{n_nonconsensus_water / n_total_water:.3f} of waters are non-consensus")
+    return
+
+
+@app.cell
 def _(mo):
     mo.md("""
     ## Water metrics
@@ -271,8 +303,9 @@ def _(mo):
     plot_style = mo.ui.dropdown(
         options=["scatter", "hexbin"], value="scatter", label="plot style"
     )
-    plot_style
-    return (plot_style,)
+    equal_axes = mo.ui.checkbox(value=False, label="equal axis ranges")
+    mo.hstack([plot_style, equal_axes], justify="start")
+    return equal_axes, plot_style
 
 
 @app.cell
@@ -282,6 +315,7 @@ def _(
     cluster_occupancy_cutoff,
     clusters,
     config,
+    equal_axes,
     metadata,
     mpl,
     np,
@@ -344,9 +378,14 @@ def _(
         _sc, ax=_ax, extend="both", spacing="uniform",
         ticks=_boundaries, format="%.3g",
     )
-    _cbar.set_label(f"{_hue_column}  (10 quantile bins, capped 1–99%)")
+    _cbar.set_label(f"{_hue_column}") #(10 quantile bins, capped 1–99%)
     _ax.set_xlabel("recall  (%clusters covered)")
     _ax.set_ylabel("precision  (%waters near cluster)")
+    if equal_axes.value:
+        _min_lim = min(_pr["recall"].min(), _pr["precision"].min()) * 0.85
+        _max_lim = 1.01 #max(_pr["recall"].max(), _pr["precision"].max())
+        _ax.set_xlim(_min_lim, _max_lim)
+        _ax.set_ylim(_min_lim, _max_lim)
     _ax.set_box_aspect(1)
     _ax.set_title(f"cluster occupancy cutoff = {cluster_occupancy_cutoff}")
     plt.tight_layout()
@@ -510,6 +549,59 @@ def _(build_cluster_tables, config, np, pd, plt, run_hdbscan):
         return fig
 
     return plot_sweep, run_sweep
+
+
+@app.cell
+def _(SUBSET, mo, pd):
+    # Grid-search results, if the user ran scripts/find_clustering_hyperparameters.py.
+    # Read-only: this cell only renders the pre-computed scores; it does not re-search.
+    _scores_path = SUBSET / "clustering_hyperparameters.csv"
+    if not _scores_path.exists():
+        grid_scores = None
+        grid_view = mo.md(
+            "*No grid search found. Run "
+            "`uv run scripts/find_clustering_hyperparameters.py <cohort.txt>` "
+            "to populate `clustering_hyperparameters.csv`, then re-run this cell.*"
+        )
+    else:
+        grid_scores = pd.read_csv(_scores_path)
+        _well_formed = grid_scores[grid_scores["dbcv"].notna()]
+        _rec = grid_scores[grid_scores["recommended"]].iloc[0]
+        _relaxed = bool(grid_scores["guard_relaxed"].iloc[0])
+
+        if _relaxed:
+            _note = "⚠️ no params kept clusters within the membership radius; guard relaxed."
+        elif _rec["dbcv_rank"] == 1 and _rec["stab_rank"] == 1:
+            _note = "best on both separation and reproducibility — criteria agree, low-risk."
+        else:
+            _note = "balance point of the DBCV (crisp) ↔ stability (coarse) tension; neither extreme."
+
+        _n_occ = _well_formed["n_occ_ge_0_3"]
+        _frac = _well_formed["frac_water_in_occ"]
+        grid_view = mo.vstack(
+            [
+                mo.md(
+                    f"### HDBSCAN grid search — recommended params\n\n"
+                    f"**Recommended:** `min_cluster_size={int(_rec['min_cluster_size'])}`, "
+                    f"`min_samples={int(_rec['min_samples'])}` "
+                    f"(DBCV rank #{int(_rec['dbcv_rank'])}, stability rank #{int(_rec['stab_rank'])}; "
+                    f"{int(_rec['n_clusters'])} clusters, {int(_rec['n_occ_ge_0_3'])} with consensus>0.3)  \n"
+                    f"{_note}\n\n"
+                    f"**Across {len(_well_formed)} well-formed candidates:** "
+                    f"{int(_n_occ.min())}–{int(_n_occ.max())} conserved sites (consensus>0.3); "
+                    f"{_frac.min():.0%}–{_frac.max():.0%} of pooled waters fall in them.\n\n"
+                    f"To apply: set `HDBSCAN_MIN_CLUSTER_SIZE`/`HDBSCAN_MIN_SAMPLES` in `config.py` "
+                    f"(or pass `--min-cluster-size`/`--min-samples`) and re-run `cluster_waters.py`."
+                ),
+                mo.ui.table(
+                    grid_scores.round(3).sort_values("max_rank", na_position="last"),
+                    selection=None,
+                    pagination=False,
+                ),
+            ]
+        )
+    grid_view
+    return
 
 
 @app.cell

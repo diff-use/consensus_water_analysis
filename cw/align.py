@@ -77,11 +77,12 @@ def kabsch(mobile: np.ndarray, fixed: np.ndarray) -> tuple[np.ndarray, np.ndarra
 
 
 def align_to_reference(
-    mobile_cif: Path,
+    mobile_cif: Path | pdbx.CIFFile,
     ref_protein: struc.AtomArray,
     *,
     out_path: Path | None = None,
     min_common_ca: int = 10,
+    pdb_id: str | None = None,
 ) -> dict | None:
     """Align one mobile CIF onto the reference protein.
 
@@ -95,8 +96,12 @@ def align_to_reference(
     Returns a report dict {pdb_id, n_common_ca, rmsd_before, rmsd_after, R, t},
     or None if n_common_ca < min_common_ca (skipped with a warning).
     """
-    pdb_id = mobile_cif.stem.removesuffix("_final")
-    mobile_cif_file = pdbx.CIFFile.read(mobile_cif)
+    if isinstance(mobile_cif, Path):
+        pdb_id = pdb_id if pdb_id is not None else mobile_cif.stem.removesuffix("_final")
+        mobile_cif_file = pdbx.CIFFile.read(mobile_cif)
+    else:
+        mobile_cif_file = mobile_cif
+        pdb_id = pdb_id if pdb_id is not None else "structure"
     mobile_protein, _ = load_protein(mobile_cif_file)
 
     mob_ca, ref_ca, n_common = get_paired_ca_positions(mobile_protein, ref_protein)
