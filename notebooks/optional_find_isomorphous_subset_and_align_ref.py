@@ -1,0 +1,387 @@
+import marimo
+
+__generated_with = "0.23.9"
+app = marimo.App(width="medium")
+
+
+@app.cell
+def _():
+    import marimo as mo
+
+    return (mo,)
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    # Space-group survey + alignment-reference pick
+
+    For one cohort's `metadata.csv`:
+
+    1. **How many space groups** are present, and how many structures sit in each.
+    2. **Isomorphousness filter** (optional) — within the dominant space group,
+       keep only structures whose unit cell is within a tolerance of the
+       reference cell (`cw.metadata.max_cell_diff`, the largest relative %
+       difference across `a, b, c, alpha, beta, gamma`).
+    3. **Reference pick** — the surviving structures sorted by resolution, so the
+       best-resolution isomorphous structure is the natural alignment reference.
+
+    Reads the precomputed `metadata.csv` only — no CIF parsing here.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    from pathlib import Path
+
+    import gemmi
+
+    import config
+    from cw.metadata import max_cell_diff
+
+    _default = str(Path(config.DATA_DIR) / "carbonicanhydrase_000562" / "metadata.csv")
+    csv_input = mo.ui.text(
+        value=_default,
+        placeholder="/path/to/<cohort>/metadata.csv",
+        label="metadata.csv",
+        full_width=True,
+    )
+    csv_input
+    return Path, csv_input, gemmi, max_cell_diff
+
+
+@app.cell
+def _(Path, csv_input, mo):
+    import pandas as pd
+
+    _csv = Path(csv_input.value.strip())
+    mo.stop(not _csv.exists(), mo.md(f"**metadata.csv not found:** `{_csv}`"))
+
+    df = pd.read_csv(_csv)
+    # resolution / r_work / r_free are "<missing>" when gemmi couldn't read them;
+    # coerce to NaN so numeric queries (e.g. `r_free <= 0.25`) don't hit strings.
+    for _col in ("resolution", "r_work", "r_free"):
+        df[_col] = pd.to_numeric(df[_col], errors="coerce")
+    mo.md(f"Loaded **{len(df)}** structures from `{_csv.name}`.")
+    return (df,)
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 1 — Space-group counts
+    """)
+    return
+
+
+@app.cell
+def _(df, mo):
+    sg_counts = (
+        df.groupby("space_group")
+        .agg(
+            n_structures=("pdb_id", "size"),
+            median_resolution=("resolution", "median"),
+            best_resolution=("resolution", "min"),
+        )
+        .sort_values("n_structures", ascending=False)
+    )
+    mo.md(
+        f"**{df['space_group'].nunique()}** distinct space groups across "
+        f"{len(df)} structures."
+    )
+    return (sg_counts,)
+
+
+@app.cell
+def _(sg_counts):
+    sg_counts
+    return
+
+
+@app.cell
+def _(sg_counts):
+    import matplotlib.pyplot as plt
+
+    _fig, _ax = plt.subplots(figsize=(7, 0.4 * len(sg_counts) + 1.5))
+    _ax.barh(sg_counts.index.astype(str), sg_counts["n_structures"], color="steelblue")
+    _ax.invert_yaxis()
+    _ax.set_xlabel("Structures")
+    _ax.set_ylabel("Space group")
+    _ax.set_title("Cohort structures per space group")
+    _fig.tight_layout()
+    _fig
+    return (plt,)
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 2 — Isomorphousness filter
+
+    Pick the space group to work in (defaults to the most populated), a
+    reference cell, and a tolerance. A structure is *isomorphous* if
+    `max_cell_diff(cell, reference_cell)` is at or below the tolerance.
+
+    **Reference cell** options:
+    - *highest resolution* — anchor on the structure you'd most likely align to.
+    - *median cell* — anchor on the cohort's central cell (robust to outliers).
+    """)
+    return
+
+
+@app.cell
+def _(mo, sg_counts):
+    sg_dropdown = mo.ui.dropdown(
+        options=sg_counts.index.astype(str).tolist(),
+        value=str(sg_counts.index[0]),
+        label="Space group",
+    )
+    ref_mode = mo.ui.dropdown(
+        options=["median cell", "highest resolution"],
+        value="median cell",
+        label="Reference cell",
+    )
+    tol_slider = mo.ui.slider(
+        start=0.0, stop=10.0, step=0.25, value=2.0, label="Tolerance (max cell diff %)",
+        show_value=True,
+    )
+    mo.vstack([sg_dropdown, ref_mode, tol_slider])
+    return ref_mode, sg_dropdown, tol_slider
+
+
+@app.cell
+def _(df, gemmi, max_cell_diff, mo, ref_mode, sg_dropdown, tol_slider):
+    _cols = ["cell_a", "cell_b", "cell_c", "cell_alpha", "cell_beta", "cell_gamma"]
+
+    in_sg = df[df["space_group"].astype(str) == sg_dropdown.value].copy()
+    mo.stop(in_sg.empty, mo.md("No structures in that space group."))
+
+    def _cell(row):
+        return gemmi.UnitCell(*(float(row[c]) for c in _cols))
+
+    if ref_mode.value == "highest resolution":
+        _ref_row = in_sg.sort_values("resolution").iloc[0]
+        ref_cell = _cell(_ref_row)
+        ref_label = f"{_ref_row['pdb_id']} (res {_ref_row['resolution']:.2f} Å)"
+    else:
+        _med = in_sg[_cols].median()
+        ref_cell = gemmi.UnitCell(*(float(_med[c]) for c in _cols))
+        ref_label = "median cell"
+
+    in_sg["max_cell_diff_pct"] = in_sg.apply(
+        lambda r: max_cell_diff(_cell(r), ref_cell), axis=1
+    )
+    in_sg["isomorphous"] = in_sg["max_cell_diff_pct"] <= tol_slider.value
+
+    _n_iso = int(in_sg["isomorphous"].sum())
+    mo.md(
+        f"Space group **{sg_dropdown.value}**: {len(in_sg)} structures.\n\n"
+        f"Reference cell: **{ref_label}** — `{ref_cell}`\n\n"
+        f"Within **{tol_slider.value}%** tolerance: "
+        f"**{_n_iso} isomorphous** / {len(in_sg) - _n_iso} excluded."
+    )
+    return (in_sg,)
+
+
+@app.cell
+def _(in_sg, plt):
+    _fig, _ax = plt.subplots(figsize=(7, 3))
+    _ax.hist(in_sg["max_cell_diff_pct"], bins=40, color="steelblue")
+    _ax.set_xlabel("max cell diff from reference (%)")
+    _ax.set_ylabel("Structures")
+    _ax.set_title("Unit-cell deviation within the selected space group")
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 3 — Alignment-reference candidates
+
+    Isomorphous structures sorted by resolution. The top row is the
+    best-resolution isomorphous structure — the natural alignment reference.
+    """)
+    return
+
+
+@app.cell
+def _(in_sg):
+    _show = [
+        "pdb_id",
+        "resolution",
+        "r_free",
+        "max_cell_diff_pct",
+        "num_water",
+        "unit_cell_volume",
+    ]
+    ref_candidates = (
+        in_sg[in_sg["isomorphous"]]
+        .sort_values("resolution")[_show]
+        .reset_index(drop=True)
+    )
+    ref_candidates
+    return (ref_candidates,)
+
+
+@app.cell
+def _(mo, ref_candidates):
+    mo.stop(ref_candidates.empty, mo.md("*No isomorphous structures at this tolerance.*"))
+    _top = ref_candidates.iloc[0]
+    mo.callout(
+        mo.md(
+            f"**Suggested reference: `{_top['pdb_id']}`** — "
+            f"resolution {_top['resolution']:.2f} Å, "
+            f"{int(_top['num_water'])} waters, "
+            f"cell diff {_top['max_cell_diff_pct']:.2f}% from reference."
+        ),
+        kind="success",
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 4 — Partition balance (volcano feasibility)
+
+    Type a boolean expression over the metadata columns. **Arm A** = rows that
+    match; **Arm B** = everyone else. A volcano comparing water-cluster
+    conservedness between the two arms is only worth running when *both* arms
+    are reasonably large — this cell just reports the split sizes so you can
+    find a balanced partition.
+
+    Uses `pandas.DataFrame.query` syntax: `and`, `or`, `not`, parentheses, and
+    comparisons all work, e.g. `resolution >= 1.8 and r_free <= 0.25`. Rows with
+    a `NaN` in a referenced column (missing resolution/R-free) never match the
+    query, so they fall into Arm B.
+    """)
+    return
+
+
+@app.cell
+def _(df, mo):
+    _numeric = [
+        c for c in ("resolution", "r_work", "r_free", "num_water", "unit_cell_volume")
+        if c in df.columns
+    ]
+    _ranges = "\n".join(
+        f"- `{c}`: {df[c].min():.3g} – {df[c].max():.3g}"
+        for c in _numeric
+        if df[c].notna().any()
+    )
+    query_input = mo.ui.text(
+        value="resolution >= 1.8 and r_free <= 0.25",
+        placeholder="resolution >= 1.8 and r_free <= 0.25",
+        label="Arm A query",
+        full_width=True,
+    )
+    mo.vstack([
+        query_input,
+        mo.md(f"**Columns:** `{'`, `'.join(df.columns)}`\n\n**Numeric ranges:**\n{_ranges}"),
+    ])
+    return (query_input,)
+
+
+@app.cell
+def _(df, mo, query_input):
+    _expr = query_input.value.strip()
+    mo.stop(not _expr, mo.md("*Enter a query above to see the split.*"))
+
+    try:
+        _matches = df.query(_expr)
+    except Exception as _exc:
+        mo.stop(True, mo.md(f"**Invalid query:** `{type(_exc).__name__}: {_exc}`"))
+
+    n_a = len(_matches)
+    n_b = len(df) - n_a
+
+    mo.md(
+        f"**Arm A (matches):** {n_a} ({n_a / len(df):.0%}) &nbsp;|&nbsp; "
+        f"**Arm B (rest):** {n_b} ({n_b / len(df):.0%})\n\n"
+        f"Query: `{_expr}`"
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 5 — Export isomorphous cohort
+
+    Write the isomorphous subset (Section 3) to a cohort `.txt` — one PDB ID per
+    line — to feed the filter / align / cluster scripts, plus a sidecar `.yaml`
+    recording the split criteria (space group, tolerance, reference) so the
+    subset is reproducible. Set the path, then click the button (it only writes
+    on click).
+    """)
+    return
+
+
+@app.cell
+def _(mo, ref_candidates):
+    cohort_out_input = mo.ui.text(
+        value="data/carbonicanhydrase_000562_iso.txt",
+        placeholder="data/<cohort>_iso.txt",
+        label="Cohort .txt output path",
+        full_width=True,
+    )
+    write_button = mo.ui.run_button(label=f"Write {len(ref_candidates)} IDs")
+    mo.vstack([cohort_out_input, write_button])
+    return cohort_out_input, write_button
+
+
+@app.cell
+def _(
+    Path,
+    cohort_out_input,
+    csv_input,
+    in_sg,
+    mo,
+    ref_candidates,
+    ref_mode,
+    sg_dropdown,
+    tol_slider,
+    write_button,
+):
+    from datetime import datetime
+
+    import yaml
+
+    mo.stop(not write_button.value, mo.md("*Click the button above to write the cohort file.*"))
+    mo.stop(ref_candidates.empty, mo.md("*No isomorphous structures to export.*"))
+
+    _out = Path(cohort_out_input.value.strip())
+    _ids = ref_candidates["pdb_id"].astype(str).tolist()
+    _out.parent.mkdir(parents=True, exist_ok=True)
+    _out.write_text("\n".join(_ids) + "\n")
+
+    _iso = in_sg[in_sg["isomorphous"]]
+    _cell_cols = ["cell_a", "cell_b", "cell_c", "cell_alpha", "cell_beta", "cell_gamma"]
+    _meta = {
+        "parent_cohort": Path(csv_input.value.strip()).parent.name,
+        "subset_txt": _out.name,
+        "split_criterion": "same_space_group_and_isomorphous_cell",
+        "space_group": sg_dropdown.value,
+        "reference_cell_mode": ref_mode.value,
+        "tolerance_pct": float(tol_slider.value),
+        "cell_ranges": {c: [float(_iso[c].min()), float(_iso[c].max())] for c in _cell_cols},
+        "suggested_reference_pdb": str(ref_candidates.iloc[0]["pdb_id"]),
+        "n_structures": len(_ids),
+        "generated_by": "notebooks/optional_find_isomorphous_subset_and_align_ref.py",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _yaml_path = _out.with_suffix(".yaml")
+    _yaml_path.write_text(yaml.safe_dump(_meta, sort_keys=False))
+
+    mo.callout(
+        mo.md(f"Wrote **{len(_ids)}** PDB IDs → `{_out}`\n\nProvenance → `{_yaml_path}`"),
+        kind="success",
+    )
+    return
+
+
+if __name__ == "__main__":
+    app.run()

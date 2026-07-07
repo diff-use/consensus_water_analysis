@@ -132,3 +132,21 @@ def per_structure_consensus_pr(
         pr = precision_recall(center_coords, water_coords, dist_cutoff)
         rows.append({"pdb_id": pdb_id, **pr})
     return pd.DataFrame(rows)
+
+
+def per_structure_consensus_chamfer(
+    cluster_members: pd.DataFrame,
+    center_coords: np.ndarray,
+) -> pd.DataFrame:
+    """Chamfer distance of each structure's waters against the consensus centers.
+
+    Continuous counterpart to per_structure_consensus_pr. Returns one row per
+    structure: pdb_id, chamfer (Å, lower is closer).
+    """
+    rows = []
+    for pdb_id, group in cluster_members.groupby("pdb_id"):
+        water_coords = group[["x", "y", "z"]].to_numpy()
+        rows.append(
+            {"pdb_id": pdb_id, "chamfer": chamfer_distance(center_coords, water_coords)}
+        )
+    return pd.DataFrame(rows)
