@@ -1,9 +1,24 @@
 from __future__ import annotations
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+
+
+def quantile_boundaries(values, n_bins, quantile_range=(0.01, 0.99)):
+    """Unique quantile bin edges over the inner quantile_range of values (default
+    1–99%, so the extreme tails are capped). Integer edges when values are
+    integer-valued. plot_pr_scatter builds its color bins from these; callers can
+    reuse the same edges to bin a related series (e.g. a num_water tradeoff curve)
+    onto bands identical to the colorbar."""
+    values = np.asarray(values)
+    q_lo, q_hi = quantile_range
+    edges = np.unique(np.quantile(values, np.linspace(q_lo, q_hi, n_bins + 1)))
+    if np.allclose(values, np.round(values)):
+        edges = np.unique(np.rint(edges))
+    return edges
 
 
 def plot_pr_scatter(
@@ -16,45 +31,95 @@ def plot_pr_scatter(
     ax=None,
     title: str | None = None,
     cmap: str = "viridis",
+    style: str = "scatter",
+    marker_size: float = 20,
+    alpha: float = 0.8,
+    lim: tuple[float, float] | None = (0.0, 1.01),
+    n_color_bins: int | None = None,
+    color_quantile_range: tuple[float, float] = (0.01, 0.99),
+    fontsize: float | None = None,
 ):
-    """Scatter of per-structure precision vs recall on a fixed [0, 1] square.
+    """Precision vs recall for per-structure rows, on an equal-aspect square.
 
-    color selects the point coloring: a column name in pr_df, an array-like of
-    values aligned to pr_df's rows, or None for a single flat color. A colorbar is
-    drawn whenever color is given; color_label labels it and defaults to the
-    column name when color is a string. Returns (fig, ax).
+    color selects point coloring: a column name in pr_df, an array aligned to its
+    rows, or None for a flat color. color_label labels the colorbar and defaults to
+    the column name.
+
+    n_color_bins, when set, discretizes the color scale into that many quantile bins
+    over color_quantile_range (default inner 1–99%) — each bin holds ~equal counts and
+    the extreme tails are capped, so the colorbar grows up/down triangles for the
+    capped values. Integer-valued colors get integer bin edges. Leave None for a plain
+    continuous scale.
+
+    style is "scatter" (alpha honored) or "hexbin" (hexes colored by the mean color
+    value per cell). lim sets both axes to the same range (equal x/y); None autoscales.
+    fontsize, when set, sizes every text element (axis labels, title, tick labels, and
+    the colorbar label/ticks) so the caller can match it to a legend/annotation drawn
+    on the returned ax; None keeps matplotlib defaults. Returns (fig, ax).
     """
     if ax is None:
-        fig, ax = plt.subplots(figsize=(5, 4))
+        fig, ax = plt.subplots(figsize=(4, 3))
     else:
         fig = ax.figure
 
-    if color is None:
-        ax.scatter(
-            pr_df[recall_col], pr_df[precision_col],
-            alpha=0.8, edgecolors="k", s=20, color="steelblue",
-        )
-    else:
+    color_values = None
+    if color is not None:
         if isinstance(color, str):
             color_values = pr_df[color].to_numpy()
             color_label = color_label or color
         else:
             color_values = np.asarray(color)
+
+    norm, boundaries = None, None
+    if color_values is not None and n_color_bins:
+        edges = quantile_boundaries(color_values, n_color_bins, color_quantile_range)
+        if len(edges) >= 2:
+            boundaries = edges
+            norm = mcolors.BoundaryNorm(boundaries, ncolors=256, extend="both")
+
+    if style == "hexbin":
+        sc = ax.hexbin(
+            pr_df[recall_col], pr_df[precision_col],
+            C=color_values, reduce_C_function=np.mean,
+            gridsize=20, cmap=cmap, norm=norm, mincnt=1,
+        )
+    elif color_values is None:
+        ax.scatter(
+            pr_df[recall_col], pr_df[precision_col],
+            alpha=alpha, edgecolors="k", s=marker_size, color="steelblue",
+        )
+        sc = None
+    else:
         sc = ax.scatter(
             pr_df[recall_col], pr_df[precision_col],
-            c=color_values, cmap=cmap, alpha=0.8, edgecolors="k", s=20,
+            c=color_values, cmap=cmap, norm=norm,
+            alpha=alpha, edgecolors="k", s=marker_size,
         )
-        cbar = fig.colorbar(sc, ax=ax)
-        if color_label:
-            cbar.set_label(color_label)
 
-    ax.set_xlabel("recall  (% clusters covered)")
-    ax.set_ylabel("precision  (% waters near cluster)")
-    ax.set_xlim(0, 1.01)
-    ax.set_ylim(0, 1.01)
+    if sc is not None and color_values is not None:
+        cbar = (
+            fig.colorbar(sc, ax=ax, extend="both", spacing="uniform",
+                         ticks=boundaries, format="%.3g")
+            if boundaries is not None
+            else fig.colorbar(sc, ax=ax)
+        )
+        if color_label:
+            cbar.set_label(color_label, fontsize=fontsize)
+        cbar.ax.tick_params(labelsize=fontsize)
+
+    ax.set_xlabel("recall", fontsize=fontsize)
+    ax.set_ylabel("precision", fontsize=fontsize)
+    ax.tick_params(labelsize=fontsize)
+    if lim is not None:
+        ax.set_xlim(*lim)
+        ax.set_ylim(*lim)
+        # equal range → force identical ticks on both axes (set_yticks can widen
+        # the view to fit out-of-range ticks, so re-pin ylim after)
+        ax.set_yticks(ax.get_xticks())
+        ax.set_ylim(*lim)
     ax.set_box_aspect(1)
     if title:
-        ax.set_title(title)
+        ax.set_title(title, fontsize=fontsize)
     return fig, ax
 
 

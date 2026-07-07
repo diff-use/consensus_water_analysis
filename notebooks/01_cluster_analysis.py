@@ -33,30 +33,35 @@ def _():
     import config
     import numpy as np
     import pandas as pd
-    import matplotlib as mpl
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
     import matplotlib.lines as mlines
     import seaborn as sns
-    from scipy.spatial import cKDTree
 
     from cw.cluster import build_cluster_tables, run_hdbscan
-    from cw.metrics import chamfer_distance, consensus_centers, precision_recall
+    from cw.metrics import (
+        chamfer_distance,
+        consensus_centers,
+        pareto_front,
+        per_structure_consensus_pr,
+        precision_recall,
+    )
+    from cw.plots import plot_pr_scatter, quantile_boundaries
 
     return (
         Path,
         build_cluster_tables,
-        cKDTree,
         chamfer_distance,
         config,
         consensus_centers,
-        mlines,
-        mpatches,
-        mpl,
         np,
+        pareto_front,
         pd,
+        per_structure_consensus_pr,
+        plot_pr_scatter,
         plt,
         precision_recall,
+        quantile_boundaries,
         run_hdbscan,
         sns,
     )
@@ -64,7 +69,7 @@ def _():
 
 @app.cell
 def _(Path, config, pd):
-    COHORT = "carbonicanhydrase_000562" #"hewls_65"
+    COHORT = "hewls_65" #"carbonicanhydrase_000562" #"hewls_65"
     DATA = Path(config.DATA_DIR) / COHORT
     SUBSET = Path(config.DATA_DIR) / Path(COHORT + "_iso")
     if not SUBSET.exists():
@@ -89,9 +94,12 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    include_noise_toggle = mo.ui.checkbox(label="include noise waters")
-    include_noise_toggle
-    return (include_noise_toggle,)
+    include_noise_toggle = mo.ui.checkbox(value=True, label="include noise waters")
+    occ_font_size = mo.ui.slider(
+        start=6, stop=20, step=1, value=16, label="font size", show_value=True,
+    )
+    mo.hstack([include_noise_toggle, occ_font_size], justify="start")
+    return include_noise_toggle, occ_font_size
 
 
 @app.cell
@@ -99,28 +107,30 @@ def _(
     cluster_members,
     clusters,
     include_noise_toggle,
-    mlines,
-    mpatches,
     np,
+    occ_font_size,
     pd,
     plt,
     sns,
 ):
     cluster_occupancy_cutoff = 0.3
+    _fs = occ_font_size.value
+    _tick_font_size = 14  # tick labels are fixed, independent of the slider
 
     if len(clusters) == 0:
-        _fig, _ax = plt.subplots(figsize=(6, 3))
-        _ax.text(0.5, 0.5, "No clusters", transform=_ax.transAxes, ha="center")
+        _fig, _ax = plt.subplots(figsize=(4, 3))
+        _ax.text(0.5, 0.5, "No clusters", transform=_ax.transAxes, ha="center", fontsize=_fs)
         plt.tight_layout()
 
     elif not include_noise_toggle.value:
-        _fig, _ax = plt.subplots(figsize=(6, 3))
+        _fig, _ax = plt.subplots(figsize=(4, 3))
         sns.histplot(clusters["cluster_occupancy"], bins=30, ax=_ax)
-        _ax.set_xlabel("cluster occupancy (fraction of structures)")
-        _ax.set_ylabel("count")
-        _ax.set_title("Cluster occupancy distribution")
+        _ax.set_xlabel("cluster occupancy (fraction of structures)", fontsize=_fs)
+        _ax.set_ylabel("count", fontsize=_fs)
+        # _ax.set_title("Cluster occupancy distribution", fontsize=_fs)
+        _ax.tick_params(labelsize=_tick_font_size)
         _ax.axvline(cluster_occupancy_cutoff, color="red", linestyle="--", linewidth=1, label=str(cluster_occupancy_cutoff))
-        _ax.legend()
+        _ax.legend(fontsize=_fs)
         plt.tight_layout()
 
     else:
@@ -138,13 +148,14 @@ def _(
         _noise_max = _noise_n  # all noise lands in one bin
 
         _fig, (_ax_top, _ax_bot) = plt.subplots(
-            2, 1, sharex=True, figsize=(6, 4),
+            2, 1, sharex=True, figsize=(4, 3),
             gridspec_kw={"height_ratios": [1, 3], "hspace": 0.05},
         )
         for _ax in (_ax_top, _ax_bot):
             sns.histplot(_data, x="cluster_occupancy", hue="source",
                          bins=_bin_edges, ax=_ax)
             _ax.axvline(cluster_occupancy_cutoff, color="red", linestyle="--", linewidth=1)
+            _ax.tick_params(labelsize=_tick_font_size)
             if _ax.get_legend():
                 _ax.get_legend().remove()
 
@@ -165,22 +176,64 @@ def _(
 
         _ax_top.set_ylabel("")
         _ax_top.set_xlabel("")
-        _ax_top.set_title("Cluster occupancy distribution")
-        _ax_bot.set_xlabel("cluster occupancy (fraction of structures)")
-        _ax_bot.set_ylabel("count")
+        # _ax_top.set_title("Cluster occupancy distribution", fontsize=_fs)
+        _ax_bot.set_xlabel("cluster occupancy", fontsize=_fs)
+        _ax_bot.set_ylabel("count", fontsize=_fs)
 
         _pal = sns.color_palette()
-        _ax_bot.legend(handles=[
-            mpatches.Patch(color=_pal[0], label="cluster"),
-            mpatches.Patch(color=_pal[1], label=f"noise  (1/{_n})"),
-            mlines.Line2D([], [], color="red", linestyle="--", linewidth=1,
-                          label=f"cutoff = {cluster_occupancy_cutoff}"),
-        ], fontsize=8)
+        # _ax_bot.legend(handles=[
+        #     mpatches.Patch(color=_pal[0], label="cluster"),
+        #     mpatches.Patch(color=_pal[1], label=f"noise"),
+        #     mlines.Line2D([], [], color="red", linestyle="--", linewidth=1,
+        #                   label=f"cutoff = {cluster_occupancy_cutoff}"),
+        # ], fontsize=_tick_font_size)
 
         plt.tight_layout()
 
     _fig
     return (cluster_occupancy_cutoff,)
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ### Cumulative water members vs cluster occupancy
+    """)
+    return
+
+
+@app.cell
+def _(cluster_members, cluster_occupancy_cutoff, clusters, plt):
+    if len(clusters) == 0:
+        _fig, _ax = plt.subplots(figsize=(5, 3))
+        _ax.text(0.5, 0.5, "No clusters", transform=_ax.transAxes, ha="center")
+    else:
+        _member_counts = (
+            cluster_members[cluster_members["within_cutoff"]]
+            .groupby("cluster_id")
+            .size()
+            .rename("n_members")
+        )
+        _cum = (
+            clusters[["cluster_id", "cluster_occupancy"]]
+            .merge(_member_counts, on="cluster_id")
+            .sort_values("cluster_occupancy")
+        )
+        _cum["cum_members"] = _cum["n_members"].cumsum()
+
+        _fig, _ax = plt.subplots(figsize=(5, 3))
+        _ax.step(_cum["cluster_occupancy"], _cum["cum_members"], where="post")
+        _ax.axvline(
+            cluster_occupancy_cutoff, color="red", linestyle="--", linewidth=1,
+            label=f"cutoff = {cluster_occupancy_cutoff}",
+        )
+        _ax.set_xlabel("cluster occupancy (fraction of structures)")
+        _ax.set_ylabel("cumulative water members")
+        _ax.legend()
+        plt.tight_layout()
+
+    _fig
+    return
 
 
 @app.cell
@@ -303,92 +356,133 @@ def _(mo):
     plot_style = mo.ui.dropdown(
         options=["scatter", "hexbin"], value="scatter", label="plot style"
     )
-    equal_axes = mo.ui.checkbox(value=False, label="equal axis ranges")
-    mo.hstack([plot_style, equal_axes], justify="start")
-    return equal_axes, plot_style
+    axis_range = mo.ui.range_slider(
+        start=0.0, stop=1.02, step=0.05, value=[0.0, 1.02],
+        label="axis range (equal x/y)", show_value=True,
+    )
+    point_alpha = mo.ui.slider(
+        start=0.1, stop=1.0, step=0.1, value=0.5, label="alpha", show_value=True,
+    )
+    font_size = mo.ui.slider(
+        start=6, stop=20, step=1, value=14, label="font size", show_value=True,
+    )
+    mo.hstack([plot_style, axis_range, point_alpha, font_size], justify="start")
+    return axis_range, font_size, plot_style, point_alpha
 
 
 @app.cell
 def _(
-    cKDTree,
     cluster_members,
     cluster_occupancy_cutoff,
     clusters,
     config,
-    equal_axes,
+    consensus_centers,
     metadata,
-    mpl,
-    np,
     pd,
+    per_structure_consensus_pr,
+):
+    # Per-structure precision/recall/f1 vs the consensus centers, plus num_water.
+    # Shared by the scatter and the Pareto-front cells below.
+    pr_df = per_structure_consensus_pr(
+        cluster_members,
+        consensus_centers(clusters, cluster_occupancy_cutoff),
+        config.CLUSTER_MEMBER_RADIUS,
+    ).merge(metadata[["pdb_id", "num_water"]], on="pdb_id", how="left")
+    pr_df["num_water"] = pd.to_numeric(pr_df["num_water"], errors="coerce")
+    pr_df = pr_df.dropna(subset=["num_water"])
+    return (pr_df,)
+
+
+@app.cell
+def _(
+    axis_range,
+    cluster_occupancy_cutoff,
+    font_size,
+    plot_pr_scatter,
     plot_style,
     plt,
+    point_alpha,
+    pr_df,
 ):
-    _dist_cutoff = config.CLUSTER_MEMBER_RADIUS
-
-    _cluster_occupancy_mask = clusters["cluster_occupancy"] >= cluster_occupancy_cutoff
-    _center_coords = clusters[_cluster_occupancy_mask][["center_x", "center_y", "center_z"]].to_numpy()
-    _center_tree = cKDTree(_center_coords)
-
-    _rows = []
-    for _pdb_id, _group in cluster_members.groupby("pdb_id"):
-        _water_coords = _group[["x", "y", "z"]].to_numpy()
-        _water_tree = cKDTree(_water_coords)
-
-        # coverage/recall: fraction of cluster centers with ≥1 water within cutoff
-        _covered = _center_tree.query_ball_point(_water_coords, r=_dist_cutoff)
-        _covered_centers = set(idx for matches in _covered for idx in matches)
-        _recall = len(_covered_centers) / len(_center_coords)
-
-        # precision: fraction of this structure's waters within cutoff of any center
-        _matched = _water_tree.query_ball_point(_center_coords, r=_dist_cutoff)
-        _matched_waters = set(idx for matches in _matched for idx in matches)
-        _precision = len(_matched_waters) / len(_water_coords)
-
-        _rows.append({"pdb_id": _pdb_id, "recall": _recall, "precision": _precision})
-
-    _hue_column = "num_water"
-    _pr = pd.DataFrame(_rows).merge(metadata[["pdb_id", _hue_column]], on="pdb_id", how="left")
-    _pr[_hue_column] = pd.to_numeric(_pr[_hue_column], errors="coerce")
-    _pr = _pr.dropna(subset=[_hue_column])
-    _vals = _pr[_hue_column].to_numpy()
-
-    # 10 quantile bins over the inner 98% (cap vmin/vmax at the 1st/99th pct);
-    # quantile edges → each bin holds ~equal numbers of structures. np.unique
-    # guards against duplicate edges when many values tie.
-    _n_bins = 10
-    _boundaries = np.unique(np.quantile(_vals, np.linspace(0.01, 0.99, _n_bins + 1)))
-    _boundaries = np.rint(_boundaries)
-    _norm = mpl.colors.BoundaryNorm(_boundaries, ncolors=256, extend="both")
-
-    _fig, _ax = plt.subplots(figsize=(4.5, 3.5))
-    if plot_style.value == "hexbin":
-        # Hexes coloured by the mean of hue_column over the structures in each cell.
-        _sc = _ax.hexbin(
-            _pr["recall"], _pr["precision"],
-            C=_vals, reduce_C_function=np.mean,
-            gridsize=20, cmap="viridis", norm=_norm, mincnt=1,
-        )
-    else:
-        _sc = _ax.scatter(
-            _pr["recall"], _pr["precision"],
-            c=_vals, cmap="viridis", norm=_norm,
-            alpha=0.8, edgecolors="k", s=20
-        )
-    _cbar = _fig.colorbar(
-        _sc, ax=_ax, extend="both", spacing="uniform",
-        ticks=_boundaries, format="%.3g",
+    _fig, _ax = plot_pr_scatter(
+        pr_df,
+        color="num_water",
+        n_color_bins=10,
+        style=plot_style.value,
+        alpha=point_alpha.value,
+        lim=tuple(axis_range.value),
+        fontsize=font_size.value,
+        title=f"cluster occupancy cutoff = {cluster_occupancy_cutoff}",
     )
-    _cbar.set_label(f"{_hue_column}") #(10 quantile bins, capped 1–99%)
-    _ax.set_xlabel("recall  (%clusters covered)")
-    _ax.set_ylabel("precision  (%waters near cluster)")
-    if equal_axes.value:
-        _min_lim = min(_pr["recall"].min(), _pr["precision"].min()) * 0.85
-        _max_lim = 1.01 #max(_pr["recall"].max(), _pr["precision"].max())
-        _ax.set_xlim(_min_lim, _max_lim)
-        _ax.set_ylim(_min_lim, _max_lim)
-    _ax.set_box_aspect(1)
-    _ax.set_title(f"cluster occupancy cutoff = {cluster_occupancy_cutoff}")
     plt.tight_layout()
+    _fig
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## Pareto front & knee
+
+    Precision and recall are both "higher is better," so the non-dominated
+    upper-right envelope of the per-structure cloud is a genuine Pareto front,
+    with `num_water` sliding you along it. The **knee** (maximum-F1 balance point)
+    and its **distance to the ideal (1, 1) corner** give one-number descriptors of
+    the front's shape and position — comparable across cohorts.
+    """)
+    return
+
+
+@app.cell
+def _(
+    axis_range,
+    font_size,
+    np,
+    pareto_front,
+    pd,
+    plot_pr_scatter,
+    point_alpha,
+    pr_df,
+    quantile_boundaries,
+):
+    # knee = maximum-F1 balance point; distance to the ideal (1, 1) corner
+    _knee = pr_df.loc[pr_df["f1"].idxmax()]
+    _dist_to_ideal = float(np.hypot(1.0 - _knee["recall"], 1.0 - _knee["precision"]))
+
+    # empirical Pareto front + num_water-binned curve. The curve reuses the exact
+    # color-bin edges (10 quantile bins) so one marker sits per colorbar band; the
+    # capped 1%/99% tails fold into the end bands via ±inf edges.
+    _front = pareto_front(pr_df)
+    _edges = quantile_boundaries(pr_df["num_water"], 10).astype(float)
+    _edges[0], _edges[-1] = -np.inf, np.inf
+    _bins = pd.cut(pr_df["num_water"], bins=_edges).rename("num_water_bin")
+    _curve = (
+        pr_df.groupby(_bins, observed=True)[["recall", "precision", "num_water"]]
+        .mean()
+        .sort_values("num_water")
+    )
+
+    _fig, _ax = plot_pr_scatter(
+        pr_df, color="num_water", n_color_bins=10,
+        alpha=point_alpha.value, lim=tuple(axis_range.value),
+        fontsize=font_size.value, marker_size=30
+        # title=f"cluster occupancy cutoff = {cluster_occupancy_cutoff}",
+    )
+    _ax.scatter([_knee["recall"]], [_knee["precision"]], marker="*", s=200,
+                facecolors="none", edgecolors="r", zorder=5, label="max F1")
+    _ax.plot(_front["recall"], _front["precision"], color="r", lw=1.5, label="Pareto front")
+    _ax.plot(_curve["recall"], _curve["precision"], color="r", marker="o", ls='--',
+             ms=2, lw=1.2, label="average")
+
+    _ax.set_xticks(_ax.get_yticks())
+    _ax.set_xlim(tuple(axis_range.value))
+    # _ax.legend(fontsize=font_size.value, loc="lower left")
+
+    print(
+        f"knee (max F1): recall={_knee['recall']:.2f}, precision={_knee['precision']:.2f}, "
+        f"F1max={_knee['f1']:.2f}, num_water*={int(round(_knee['num_water']))}, "
+        f"dist_to_ideal={_dist_to_ideal:.2f}"
+    )
     _fig
     return
 

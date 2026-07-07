@@ -90,6 +90,31 @@ def consensus_centers(clusters: pd.DataFrame, occupancy_cutoff: float) -> np.nda
     return clusters.loc[mask, ["center_x", "center_y", "center_z"]].to_numpy()
 
 
+def pareto_front(
+    pr_df: pd.DataFrame,
+    x_col: str = "recall",
+    y_col: str = "precision",
+) -> pd.DataFrame:
+    """Non-dominated subset of pr_df, maximizing both x_col and y_col.
+
+    A row is dominated when another row has x' ≥ x and y' ≥ y with at least one
+    strict; the survivors form the upper-right (Pareto-optimal) envelope of the
+    point cloud. Returned sorted ascending by x_col. O(n²) — fine for the few
+    hundred structures in a cohort.
+    """
+    pts = pr_df[[x_col, y_col]].to_numpy()
+    keep = np.ones(len(pts), dtype=bool)
+    for i in range(len(pts)):
+        dominated = (
+            (pts[:, 0] >= pts[i, 0])
+            & (pts[:, 1] >= pts[i, 1])
+            & ((pts[:, 0] > pts[i, 0]) | (pts[:, 1] > pts[i, 1]))
+        )
+        if dominated.any():
+            keep[i] = False
+    return pr_df[keep].sort_values(x_col).reset_index(drop=True)
+
+
 def per_structure_consensus_pr(
     cluster_members: pd.DataFrame,
     center_coords: np.ndarray,
