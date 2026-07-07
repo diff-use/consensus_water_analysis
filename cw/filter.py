@@ -4,7 +4,12 @@ import biotite.structure as struc
 import gemmi
 import numpy as np
 
-from cw.io import edia_scores_in_order, normalize_ins_code, water_oxygen_mask
+from cw.io import (
+    edia_scores_in_order,
+    normalize_ins_code,
+    protein_heavy_mask,
+    water_oxygen_mask,
+)
 
 
 def best_sym_positions(
@@ -75,10 +80,9 @@ def keep_by_distance(
     keep    : boolean mask over `water_O_indices` (True = kept)
     n_moved : water O atoms actually repositioned (|shift| > 1e-4 Å)
     """
-    protein_heavy_mask = (~atoms.hetero) & (atoms.element != "H")
     orig_pos = atoms.coord[water_O_indices].copy()
     best_pos, best_min_d = best_sym_positions(
-        orig_pos, atoms.coord[protein_heavy_mask], cell, spacegroup
+        orig_pos, atoms.coord[protein_heavy_mask(atoms)], cell, spacegroup
     )
     atoms.coord[water_O_indices] = best_pos
     n_moved = int(np.sum(np.linalg.norm(best_pos - orig_pos, axis=1) > 1e-4))
@@ -110,6 +114,49 @@ def keep_by_edia(
     return edia_scores_in_order(keys, edia_lists) >= cutoff
 
 
+def keep_by_bfactor(
+    atoms: struc.AtomArray,
+    water_O_mask: np.ndarray,
+    cutoff: float,
+    mode: str = "zscore",
+    population: str = "water",
+) -> np.ndarray:
+    """B-factor filter (coordinate-independent). Keep waters whose B-factor passes
+    `cutoff`.
+
+    mode="zscore" (default): keep waters whose B-factor z-score <= cutoff, where the
+    z-score standardises each water's B-factor against a reference `population` of
+    B-factors — "water" (water O atoms, default), "protein" (protein heavy atoms), or
+    "all" (every atom). High B-factors (poorly ordered waters) land above the cutoff
+    and are dropped. A degenerate reference (std == 0) keeps every water.
+
+    mode="absolute": keep waters whose raw B-factor <= cutoff; `population` is ignored.
+
+    Returns a boolean mask over the water-O atoms (order matches np.where(water_O_mask)).
+    """
+    water_b = atoms.b_factor[water_O_mask]
+    if mode == "absolute":
+        return water_b <= cutoff
+    if mode != "zscore":
+        raise ValueError(f"bfactor mode must be 'zscore' or 'absolute', got {mode!r}")
+
+    if population == "water":
+        ref = water_b
+    elif population == "protein":
+        ref = atoms.b_factor[protein_heavy_mask(atoms)]
+    elif population == "all":
+        ref = atoms.b_factor
+    else:
+        raise ValueError(
+            f"bfactor population must be 'water', 'protein', or 'all', got {population!r}"
+        )
+
+    std = ref.std()
+    if std == 0:
+        return np.ones(len(water_b), dtype=bool)
+    return (water_b - ref.mean()) / std <= cutoff
+
+
 def filter_waters(
     atoms: struc.AtomArray,
     cell: gemmi.UnitCell,
@@ -117,6 +164,9 @@ def filter_waters(
     distance_cutoff: float,
     edia_lists: dict[tuple[str, int, str], list[float]] | None = None,
     edia_cutoff: float | None = None,
+    bfactor_cutoff: float | None = None,
+    bfactor_mode: str = "zscore",
+    bfactor_population: str = "water",
 ) -> tuple[struc.AtomArray, dict[str, int], np.ndarray]:
     """Filter waters by composing per-water keep-masks, returning the filtered
     structure, a stats dict, and the CIF-row keep-mask.
@@ -124,29 +174,33 @@ def filter_waters(
     Each concern is a single-purpose keep_by_* filter returning a boolean mask over the
     water-O atoms; the masks are AND-ed in order so a removal is attributed to the first
     filter that dropped it. Distance runs first (it also relocates each water O to its
-    canonical ASU position); EDIA runs on the distance survivors when both `edia_lists`
-    and `edia_cutoff` are given. To add a future concern (e.g. a B-factor cutoff), write
-    another keep_by_* filter and AND it in here — filter_waters is the only place that
-    knows how the concerns combine.
+    canonical ASU position); EDIA then B-factor run on the survivors when their cutoff is
+    given. To add a future concern, write another keep_by_* filter and AND it in here —
+    filter_waters is the only place that knows how the concerns combine.
 
     Parameters
     ----------
-    atoms          : biotite AtomArray (loaded with altloc="all" to preserve every
-                     water altloc; duplicate protein atoms are fine — min-distance is
-                     taken so extra altloc variants only make the cutoff stricter)
-    cell           : gemmi.UnitCell from the same structure
-    spacegroup     : gemmi.SpaceGroup from the same structure
-    distance_cutoff: water–protein distance cutoff in Å (typically 4.0)
-    edia_lists     : per-residue EDIAm score lists from cw.io.load_edia_all_altlocs,
-                     or None to skip EDIA filtering
-    edia_cutoff    : minimum EDIAm to keep a water, or None to skip EDIA filtering
+    atoms            : biotite AtomArray (loaded with altloc="all" to preserve every
+                       water altloc; duplicate protein atoms are fine — min-distance is
+                       taken so extra altloc variants only make the cutoff stricter)
+    cell             : gemmi.UnitCell from the same structure
+    spacegroup       : gemmi.SpaceGroup from the same structure
+    distance_cutoff  : water–protein distance cutoff in Å (typically 4.0)
+    edia_lists       : per-residue EDIAm score lists from cw.io.load_edia_all_altlocs,
+                       or None to skip EDIA filtering
+    edia_cutoff      : minimum EDIAm to keep a water, or None to skip EDIA filtering
+    bfactor_cutoff   : B-factor cutoff to keep a water, or None to skip B-factor filtering
+    bfactor_mode     : "zscore" (default) or "absolute" — see keep_by_bfactor
+    bfactor_population: reference population for the z-score — "water" (default),
+                       "protein", or "all" (ignored when bfactor_mode="absolute")
 
     Returns
     -------
     filtered_atoms : AtomArray of the whole structure (protein plus kept waters), with
                      removed waters dropped and survivors at their canonical ASU coords
     stats          : dict of counts — n_water, n_moved, n_removed_distance,
-                     n_removed_edia (a removal counts once, against its dropping filter)
+                     n_removed_edia, n_removed_bfactor (a removal counts once, against
+                     its dropping filter)
     keep_mask      : boolean mask (length = len(atoms)) for filtering CIF rows
     """
     is_water = (atoms.res_name == "HOH") & atoms.hetero
@@ -154,7 +208,13 @@ def filter_waters(
     water_O_indices = np.where(water_O_mask)[0]
     n_water = len(water_O_indices)
 
-    stats = {"n_water": n_water, "n_moved": 0, "n_removed_distance": 0, "n_removed_edia": 0}
+    stats = {
+        "n_water": n_water,
+        "n_moved": 0,
+        "n_removed_distance": 0,
+        "n_removed_edia": 0,
+        "n_removed_bfactor": 0,
+    }
     if n_water == 0:
         return atoms, stats, (~is_water).copy()
 
@@ -167,6 +227,13 @@ def filter_waters(
         edia_keep = keep_by_edia(atoms[water_O_mask], edia_lists, edia_cutoff)
         stats["n_removed_edia"] = int(np.sum(keep & ~edia_keep))
         keep &= edia_keep
+
+    if bfactor_cutoff is not None:
+        bfactor_keep = keep_by_bfactor(
+            atoms, water_O_mask, bfactor_cutoff, bfactor_mode, bfactor_population
+        )
+        stats["n_removed_bfactor"] = int(np.sum(keep & ~bfactor_keep))
+        keep &= bfactor_keep
 
     final_mask = (~is_water).copy()
     final_mask[water_O_indices[keep]] = True

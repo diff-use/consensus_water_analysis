@@ -74,6 +74,11 @@ def water_oxygen_mask(atoms: struc.AtomArray) -> np.ndarray:
     return (atoms.res_name == "HOH") & atoms.hetero & (atoms.element == "O")
 
 
+def protein_heavy_mask(atoms: struc.AtomArray) -> np.ndarray:
+    """Boolean mask selecting protein heavy atoms (non-hetero, non-hydrogen)."""
+    return (~atoms.hetero) & (atoms.element != "H")
+
+
 def count_water_oxygens(atoms: struc.AtomArray) -> int:
     """Count water oxygens (each altloc counted separately)."""
     return int(water_oxygen_mask(atoms).sum())

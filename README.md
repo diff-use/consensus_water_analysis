@@ -48,11 +48,13 @@ uv run scripts/build_metadata.py pdb_ids.txt [-o metadata.csv]
 
 ```
 uv run scripts/filter_waters_by_distance.py pdb_ids.txt [--cutoff 4.0] \
-       [--edia-cutoff X] [--drop-if-no-edia-json] [--output-dir DIR]
+       [--edia-cutoff X] [--drop-if-no-edia-json] \
+       [--bfactor-cutoff X] [--bfactor-mode zscore|absolute] \
+       [--bfactor-population water|protein|all] [--output-dir DIR]
 ```
 
 - Reads: raw mmCIF files from `ALL_PDB_REDO_DIR` (and per-structure EDIA JSON when `--edia-cutoff` is set)
-- Writes: `data/<cohort>/filtered_pdbs/<id>.cif` + `filtering_report_<cutoff>A[_edia<X>].csv`
+- Writes: `data/<cohort>/filtered_pdbs/<id>.cif` + `filtering_report_<cutoff>A[_edia<X>][_bfactor_…].csv`
 - Report columns: `pdb_id`, `n_waters_before`, `n_waters_moved`, `n_waters_removed`, `n_waters_remaining`
 - Default cutoff: `WATER_PROT_DIST_CUTOFF` in `config.py` (4.0 Å)
 
@@ -70,6 +72,10 @@ uv run scripts/filter_waters_by_distance.py pdb_ids.txt [--cutoff 4.0] \
 **EDIA filtering (optional, off by default):** pass `--edia-cutoff X` (e.g. `0.4` or `0.6`) to additionally drop waters whose EDIAm score is below `X`. EDIA is coordinate-independent, so it is a second keep-mask applied to the distance-surviving waters. Scores are read from the per-structure EDIA JSON (`EDIA_TEMPLATE` in config) and paired to water altlocs positionally, the same contract clustering uses. When enabled, the report adds `n_waters_removed_edia` and `edia_applied` columns and the filename gains an `_edia<X>` suffix.
 - A water with a score below the cutoff, or with no matching score in a JSON that is present, is dropped.
 - A structure whose EDIA JSON is entirely missing keeps all its waters and logs a warning (`edia_applied = False`); pass `--drop-if-no-edia-json` to drop all of that structure's waters instead.
+
+**B-factor filtering (optional, off by default):** pass `--bfactor-cutoff X` to additionally drop high-B-factor (poorly ordered) waters. Like EDIA it is coordinate-independent, so it is a further keep-mask applied to the survivors. When enabled, the report adds `n_waters_removed_bfactor` and the filename gains a `_bfactor_z…` / `_bfactor_abs…` suffix.
+- Default `--bfactor-mode zscore`: each water's B-factor is standardised to a z-score, and waters with z-score **above** `X` are dropped. The mean/std reference is chosen with `--bfactor-population`: `water` (default — water O atoms only), `protein` (protein heavy atoms), or `all` (every atom).
+- `--bfactor-mode absolute`: waters with raw B-factor above `X` are dropped; `--bfactor-population` is ignored.
 
 ### Stage 3 — Pairwise alignment
 
@@ -142,7 +148,7 @@ data/<cohort>/
 ├── metadata.csv
 ├── filtered_pdbs/
 │   ├── <id>.cif
-│   └── filtering_report_<cutoff>A[_edia<X>].csv
+│   └── filtering_report_<cutoff>A[_edia<X>][_bfactor_…].csv
 ├── aligned_pdbs/
 │   ├── <id>.cif
 │   └── alignment_report_<ref_id>.csv

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from scipy.spatial.distance import cdist
 
-from cw.filter import best_sym_positions, filter_waters
+from cw.filter import best_sym_positions, filter_waters, keep_by_bfactor
 from cw.io import (
     edia_scores_in_order,
     load_edia_all_altlocs,
@@ -221,3 +221,96 @@ def test_filter_edia_neg_inf_matches_distance_only(cif_path_6ybf, edia_path_6ybf
     assert inf_stats == dist_stats
     np.testing.assert_array_equal(inf_mask, dist_mask)
     np.testing.assert_array_equal(inf_atoms.coord, dist_atoms.coord)
+
+
+# ── B-factor filtering ──────────────────────────────────────────────────────────
+
+
+def test_keep_by_bfactor_zscore_keeps_lowest_and_honours_population(cif_path_6ybf):
+    """z-score mode is a monotonic standardization, so its keep-set is a clean raw-B
+    threshold: every kept water has a lower B-factor than every dropped one (the
+    best-ordered waters survive). The reference population is genuinely consulted —
+    swapping it changes which waters survive at a fixed cutoff."""
+    atoms = _load_atoms(cif_path_6ybf)
+    mask = water_oxygen_mask(atoms)
+    water_b = atoms.b_factor[mask]
+
+    keep = keep_by_bfactor(atoms, mask, 0.5)  # defaults: mode="zscore", population="water"
+    assert keep.any() and not keep.all()               # fixture sanity: cutoff splits the waters
+    assert water_b[keep].max() <= water_b[~keep].min()  # no dropped water is better-ordered than a kept one
+
+    masks = [keep_by_bfactor(atoms, mask, 0.5, population=p) for p in ("water", "protein", "all")]
+    assert any(not np.array_equal(masks[0], m) for m in masks[1:])
+
+
+def test_keep_by_bfactor_degenerate_population_keeps_all(cif_path_6ybf):
+    """A reference population with zero spread (std == 0) can't standardize, so every
+    water is kept regardless of how strict the cutoff is."""
+    atoms = _load_atoms(cif_path_6ybf)
+    mask = water_oxygen_mask(atoms)
+    atoms.b_factor[mask] = 20.0
+
+    keep = keep_by_bfactor(atoms, mask, -5.0, population="water")
+    assert keep.all()
+
+
+def test_keep_by_bfactor_absolute(cif_path_6ybf):
+    """absolute mode keeps waters with raw B-factor <= cutoff and ignores population."""
+    atoms = _load_atoms(cif_path_6ybf)
+    mask = water_oxygen_mask(atoms)
+    water_b = atoms.b_factor[mask]
+    cutoff = float(np.median(water_b))
+
+    keep = keep_by_bfactor(atoms, mask, cutoff, mode="absolute", population="protein")
+    np.testing.assert_array_equal(keep, water_b <= cutoff)
+
+
+def test_filter_bfactor_partitions_and_respects_cutoff(cif_path_6ybf):
+    """A cutoff inside the water B-factor z-score range drops some — not all — distance
+    survivors; counts partition exactly and every kept water is within the cutoff."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+    atoms = _load_atoms(cif_path_6ybf)
+    water_b = atoms.b_factor[water_oxygen_mask(atoms)]
+    cutoff = 0.0
+
+    filtered, stats, _ = filter_waters(atoms, cell, sg, CUTOFF, bfactor_cutoff=cutoff)
+    kept = filtered[water_oxygen_mask(filtered)]
+    assert stats["n_removed_bfactor"] > 0
+    assert kept.array_length() > 0
+    assert (
+        stats["n_removed_distance"] + stats["n_removed_bfactor"] + kept.array_length()
+        == stats["n_water"]
+    )
+    assert ((kept.b_factor - water_b.mean()) / water_b.std() <= cutoff).all()
+
+
+def test_filter_bfactor_disabled_matches_distance_only(cif_path_6ybf):
+    """With no B-factor cutoff the result equals distance-only filtering and
+    n_removed_bfactor is 0."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+    filtered, stats, _ = filter_waters(_load_atoms(cif_path_6ybf), cell, sg, CUTOFF)
+    assert stats["n_removed_bfactor"] == 0
+
+
+def test_filter_bfactor_infinite_cutoff_matches_distance_only(cif_path_6ybf):
+    """An infinite B-factor cutoff keeps every distance survivor in both zscore and
+    absolute modes, reproducing distance-only filtering exactly: same keep-mask, same
+    relocated coords, and n_removed_bfactor is 0."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+
+    dist_atoms, dist_stats, dist_mask = filter_waters(_load_atoms(cif_path_6ybf), cell, sg, CUTOFF)
+
+    for mode in ("zscore", "absolute"):
+        bf_atoms, bf_stats, bf_mask = filter_waters(
+            _load_atoms(cif_path_6ybf), cell, sg, CUTOFF, bfactor_cutoff=np.inf, bfactor_mode=mode
+        )
+        assert bf_stats["n_removed_bfactor"] == 0
+        assert bf_stats == dist_stats
+        np.testing.assert_array_equal(bf_mask, dist_mask)
+        np.testing.assert_array_equal(bf_atoms.coord, dist_atoms.coord)
