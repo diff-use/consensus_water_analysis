@@ -64,7 +64,7 @@ from loguru import logger
 
 import config
 from cw.align import align_to_reference
-from cw.filter import filter_by_distance
+from cw.filter import filter_waters
 from cw.io import (
     load_protein,
     load_structure_waters,
@@ -103,7 +103,7 @@ def clean_phenix_waters(raw_path, pdb_id, *, distance_filter, filter_cutoff):
 
     read_phenix_cif normalises the raw phenix output so biotite can read it. When
     distance_filter, the waters are then symmetry-aware distance-filtered to within
-    filter_cutoff Å of protein (cw.filter.filter_by_distance, each structure's own
+    filter_cutoff Å of protein (cw.filter.filter_waters, each structure's own
     cell / space group) — matching how the deposited references were filtered — so
     phenix-added solvent far from protein is dropped. Otherwise every water is kept.
     """
@@ -113,7 +113,7 @@ def clean_phenix_waters(raw_path, pdb_id, *, distance_filter, filter_cutoff):
     st = gemmi.read_structure(str(raw_path))
     sg = st.find_spacegroup() or gemmi.SpaceGroup("P 1")
     atoms = pdbx.get_structure(cleaned, model=1, altloc="all", extra_fields=["b_factor", "occupancy"])
-    filtered, *_ = filter_by_distance(atoms, st.cell, sg, filter_cutoff)
+    filtered, *_ = filter_waters(atoms, st.cell, sg, filter_cutoff)
     return cleaned, filtered.coord[water_oxygen_mask(filtered)].astype(float)
 
 

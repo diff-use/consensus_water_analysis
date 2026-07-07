@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.6"
+__generated_with = "0.23.9"
 app = marimo.App(width="medium")
 
 
@@ -41,7 +41,7 @@ def _():
 
     import config
     from cw.align import align_to_reference
-    from cw.filter import best_sym_positions, filter_by_distance
+    from cw.filter import best_sym_positions, filter_waters
     from cw.io import (
         count_water_oxygens,
         load_protein,
@@ -57,7 +57,7 @@ def _():
         cdist,
         config,
         count_water_oxygens,
-        filter_by_distance,
+        filter_waters,
         gemmi,
         load_protein,
         load_structure_waters,
@@ -244,14 +244,16 @@ def _(
     filt_cutoff,
     filt_n_before,
     filt_sg,
-    filter_by_distance,
+    filter_waters,
     mo,
 ):
-    filtered, _n_original, _n_removed, filt_n_moved, _final_mask = filter_by_distance(
+    filtered, _stats, _final_mask = filter_waters(
         filt_atoms.copy(), filt_cell, filt_sg, filt_cutoff
     )
+    filt_n_moved = _stats["n_moved"]
+    _n_removed = _stats["n_removed_distance"]
     _n_after = count_water_oxygens(filtered)
-    assert _n_original == filt_n_before
+    assert _stats["n_water"] == filt_n_before
 
     mo.md(
         f"### filter result  (cutoff = {filt_cutoff} Å)\n\n"

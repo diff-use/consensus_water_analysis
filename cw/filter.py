@@ -4,7 +4,7 @@ import biotite.structure as struc
 import gemmi
 import numpy as np
 
-from cw.io import water_oxygen_mask
+from cw.io import edia_scores_in_order, normalize_ins_code, water_oxygen_mask
 
 
 def best_sym_positions(
@@ -58,63 +58,116 @@ def best_sym_positions(
     return best_pos, best_min_d
 
 
-def filter_by_distance(
+def keep_by_distance(
     atoms: struc.AtomArray,
+    water_O_indices: np.ndarray,
     cell: gemmi.UnitCell,
     spacegroup: gemmi.SpaceGroup,
     cutoff: float,
-) -> tuple[struc.AtomArray, int, int, int, np.ndarray]:
-    """Keep only waters within `cutoff` Å of any protein heavy atom under any
-    symmetry image.  Water O coordinates are updated to the canonical ASU position.
-
-    Parameters
-    ----------
-    atoms     : biotite AtomArray (loaded with altloc="all" to preserve every
-                water altloc; duplicate protein atoms are fine — min-distance
-                is taken so extra altloc variants only make the cutoff stricter)
-    cell      : gemmi.UnitCell from the same structure
-    spacegroup: gemmi.SpaceGroup from the same structure
-    cutoff    : distance cutoff in Å (typically 4.0)
+) -> tuple[np.ndarray, int]:
+    """Distance filter (relocating). Move each water O to the canonical ASU position
+    nearest any protein heavy atom under any symmetry image — matching
+    phenix.sort_hetatms — writing the new coords back into `atoms`, then keep the
+    waters within `cutoff` Å.
 
     Returns
     -------
-    filtered_atoms : AtomArray of whole structure including protein, with distant
-                     waters removed.
-    n_water        : total water O atoms before filtering
-    n_removed      : number of water O atoms removed
-    n_moved        : number of water O atoms repositioned by symmetry before
-                     filtering (|shift| > 1e-4 Å)
+    keep    : boolean mask over `water_O_indices` (True = kept)
+    n_moved : water O atoms actually repositioned (|shift| > 1e-4 Å)
+    """
+    protein_heavy_mask = (~atoms.hetero) & (atoms.element != "H")
+    orig_pos = atoms.coord[water_O_indices].copy()
+    best_pos, best_min_d = best_sym_positions(
+        orig_pos, atoms.coord[protein_heavy_mask], cell, spacegroup
+    )
+    atoms.coord[water_O_indices] = best_pos
+    n_moved = int(np.sum(np.linalg.norm(best_pos - orig_pos, axis=1) > 1e-4))
+    return best_min_d <= cutoff, n_moved
+
+
+def keep_by_edia(
+    water_atoms: struc.AtomArray,
+    edia_lists: dict[tuple[str, int, str], list[float]],
+    cutoff: float,
+) -> np.ndarray:
+    """EDIA filter (coordinate-independent). Keep waters whose EDIAm >= `cutoff`; a
+    missing score is dropped (NaN >= cutoff is False), so an empty `edia_lists` drops
+    every water — the "structure has no EDIA JSON, drop it" policy.
+
+    Altloc pairing follows cw.io.edia_scores_in_order (the EDIA JSON has no altloc
+    field; the Nth water-O of a residue maps to the Nth score).
+
+    Returns a boolean mask over `water_atoms`.
+    """
+    keys = [
+        (
+            str(water_atoms.chain_id[i]),
+            int(water_atoms.res_id[i]),
+            normalize_ins_code(water_atoms.ins_code[i]),
+        )
+        for i in range(len(water_atoms))
+    ]
+    return edia_scores_in_order(keys, edia_lists) >= cutoff
+
+
+def filter_waters(
+    atoms: struc.AtomArray,
+    cell: gemmi.UnitCell,
+    spacegroup: gemmi.SpaceGroup,
+    distance_cutoff: float,
+    edia_lists: dict[tuple[str, int, str], list[float]] | None = None,
+    edia_cutoff: float | None = None,
+) -> tuple[struc.AtomArray, dict[str, int], np.ndarray]:
+    """Filter waters by composing per-water keep-masks, returning the filtered
+    structure, a stats dict, and the CIF-row keep-mask.
+
+    Each concern is a single-purpose keep_by_* filter returning a boolean mask over the
+    water-O atoms; the masks are AND-ed in order so a removal is attributed to the first
+    filter that dropped it. Distance runs first (it also relocates each water O to its
+    canonical ASU position); EDIA runs on the distance survivors when both `edia_lists`
+    and `edia_cutoff` are given. To add a future concern (e.g. a B-factor cutoff), write
+    another keep_by_* filter and AND it in here — filter_waters is the only place that
+    knows how the concerns combine.
+
+    Parameters
+    ----------
+    atoms          : biotite AtomArray (loaded with altloc="all" to preserve every
+                     water altloc; duplicate protein atoms are fine — min-distance is
+                     taken so extra altloc variants only make the cutoff stricter)
+    cell           : gemmi.UnitCell from the same structure
+    spacegroup     : gemmi.SpaceGroup from the same structure
+    distance_cutoff: water–protein distance cutoff in Å (typically 4.0)
+    edia_lists     : per-residue EDIAm score lists from cw.io.load_edia_all_altlocs,
+                     or None to skip EDIA filtering
+    edia_cutoff    : minimum EDIAm to keep a water, or None to skip EDIA filtering
+
+    Returns
+    -------
+    filtered_atoms : AtomArray of the whole structure (protein plus kept waters), with
+                     removed waters dropped and survivors at their canonical ASU coords
+    stats          : dict of counts — n_water, n_moved, n_removed_distance,
+                     n_removed_edia (a removal counts once, against its dropping filter)
     keep_mask      : boolean mask (length = len(atoms)) for filtering CIF rows
     """
     is_water = (atoms.res_name == "HOH") & atoms.hetero
     water_O_mask = water_oxygen_mask(atoms)
-    protein_heavy_mask = (~atoms.hetero) & (atoms.element != "H")
-    non_water_mask = ~is_water
-
     water_O_indices = np.where(water_O_mask)[0]
     n_water = len(water_O_indices)
 
+    stats = {"n_water": n_water, "n_moved": 0, "n_removed_distance": 0, "n_removed_edia": 0}
     if n_water == 0:
-        return atoms, 0, 0, 0, non_water_mask.copy()
+        return atoms, stats, (~is_water).copy()
 
-    orig_pos = atoms.coord[water_O_mask].copy()
-    best_pos, best_min_d = best_sym_positions(
-        atoms.coord[water_O_mask],
-        atoms.coord[protein_heavy_mask],
-        cell,
-        spacegroup,
+    keep, stats["n_moved"] = keep_by_distance(
+        atoms, water_O_indices, cell, spacegroup, distance_cutoff
     )
+    stats["n_removed_distance"] = int(np.sum(~keep))
 
-    n_moved = int(np.sum(np.linalg.norm(best_pos - orig_pos, axis=1) > 1e-4))
+    if edia_lists is not None and edia_cutoff is not None:
+        edia_keep = keep_by_edia(atoms[water_O_mask], edia_lists, edia_cutoff)
+        stats["n_removed_edia"] = int(np.sum(keep & ~edia_keep))
+        keep &= edia_keep
 
-    # Move each water O to the canonical ASU position nearest to the protein.
-    atoms.coord[water_O_indices] = best_pos
-
-    keep_mask = best_min_d <= cutoff
-    n_removed = int(np.sum(~keep_mask))
-
-    kept_water_O_indices = water_O_indices[keep_mask]
-    final_mask = non_water_mask.copy()
-    final_mask[kept_water_O_indices] = True
-
-    return atoms[final_mask], n_water, n_removed, n_moved, final_mask
+    final_mask = (~is_water).copy()
+    final_mask[water_O_indices[keep]] = True
+    return atoms[final_mask], stats, final_mask

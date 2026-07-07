@@ -147,6 +147,32 @@ def load_edia_all_altlocs(json_path: Path) -> dict[tuple[str, int, str], list[fl
     return scores
 
 
+def edia_scores_in_order(
+    keys: list[tuple[str, int, str]],
+    edia_lists: dict[tuple[str, int, str], list[float]],
+) -> np.ndarray:
+    """Score each ordered (chain_id, res_id, ins_code) key against per-residue EDIAm lists.
+
+    Single source of truth for the positional altloc-pairing contract: the EDIA JSON
+    has no altloc field and emits one entry per altloc variant in file order, which
+    matches the CIF atom_site order biotite preserves with altloc='all'. So the Nth
+    occurrence of a key is paired with the Nth score in that key's list. Keys with no
+    matching score (missing residue or position past the list end) become NaN.
+
+    Both cw.io._attach_edia (DataFrame rows) and cw.filter.keep_by_edia (water-O atoms)
+    build their keys and delegate here so the pairing rule lives in one place.
+    """
+    scores = np.full(len(keys), np.nan)
+    seen: dict[tuple[str, int, str], int] = {}
+    for i, key in enumerate(keys):
+        pos = seen.get(key, 0)
+        seen[key] = pos + 1
+        vals = edia_lists.get(key)
+        if vals is not None and pos < len(vals):
+            scores[i] = vals[pos]
+    return scores
+
+
 def load_protein(
     src: Path | pdbx.CIFFile, altloc: str = "occupancy"
 ) -> tuple[struc.AtomArray, int]:
@@ -173,36 +199,22 @@ def load_protein(
 
 
 def _attach_edia(df: pd.DataFrame, edia_dict_of_lists: dict[tuple[str, int, str], list[float]]) -> pd.DataFrame:
-    """Merge EDIAm scores into df using positional ordering within each residue group.
+    """Attach EDIAm scores to df via the shared positional altloc-pairing contract.
 
-    The EDIA JSON has no altloc field — it emits one entry per altloc variant in
-    file order. biotite with altloc='all' preserves the same ordering in atom_site.
-    cumcount() assigns a 0-based position to each CIF row within a
-    (chain, res_id, ins_code) group; _pos in the EDIA frame mirrors that index,
-    so the merge pairs CIF row 0 → JSON entry 0, row 1 → entry 1, etc.
+    Builds one (chain_id, res_id, ins_code) key per CIF row in atom_site order and
+    defers to edia_scores_in_order, which pairs the Nth row of a residue group with
+    the Nth score in that group's list.
 
     df must still contain ins_code. Adds an 'edia' column.
     """
-    if not edia_dict_of_lists:
-        df["edia"] = float("nan")
-        return df
-
-    df["_pos"] = df.groupby(["chain_id", "res_id", "ins_code"]).cumcount()
-    edia_df = pd.DataFrame(
-        [
-            {
-                "chain_id": chain_id,
-                "res_id": res_id,
-                "ins_code": ins_code,
-                "_pos": pos,
-                "edia": val,
-            }
-            for (chain_id, res_id, ins_code), vals in edia_dict_of_lists.items()
-            for pos, val in enumerate(vals)
-        ]
-    )
-    df = df.merge(edia_df, on=["chain_id", "res_id", "ins_code", "_pos"], how="left")
-    return df.drop(columns=["_pos"])
+    keys = [
+        (str(chain_id), int(res_id), ins_code)
+        for chain_id, res_id, ins_code in zip(
+            df["chain_id"], df["res_id"], df["ins_code"]
+        )
+    ]
+    df["edia"] = edia_scores_in_order(keys, edia_dict_of_lists)
+    return df
 
 
 def _attach_muse(df: pd.DataFrame, muse_csv: Path) -> pd.DataFrame:

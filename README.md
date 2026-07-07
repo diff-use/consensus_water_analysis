@@ -24,6 +24,8 @@ Conserved-water analysis from a fixed local set of PDB-REDO mmCIF structures.
 
 Run stages in order. Each script takes the cohort `.txt` as its first argument and writes output under `data/<cohort_stem>/`.
 
+To carve an isomorphous subset out of a cohort and pick an alignment reference, run the interactive `experiments/space_group_reference_survey.py` marimo notebook after Stage 1: it groups metadata by space group, filters by unit-cell similarity, and writes a `<cohort>_iso.txt` (plus a sidecar `.yaml` recording the split). Feed that `.txt` into the later stages as the cohort. This step is optional and lives in `experiments/` (see the note on promotion in that file's header).
+
 ### Stage 1 — Metadata
 
 ```
@@ -45,11 +47,12 @@ uv run scripts/build_metadata.py pdb_ids.txt [-o metadata.csv]
 ### Stage 2 — Filter waters by protein distance
 
 ```
-uv run scripts/filter_waters_by_distance.py pdb_ids.txt [--cutoff 4.0] [--output-dir DIR]
+uv run scripts/filter_waters_by_distance.py pdb_ids.txt [--cutoff 4.0] \
+       [--edia-cutoff X] [--drop-if-no-edia-json] [--output-dir DIR]
 ```
 
-- Reads: raw mmCIF files from `ALL_PDB_REDO_DIR`
-- Writes: `data/<cohort>/filtered_pdbs/<id>.cif` + `filtering_report_<cutoff>A.csv`
+- Reads: raw mmCIF files from `ALL_PDB_REDO_DIR` (and per-structure EDIA JSON when `--edia-cutoff` is set)
+- Writes: `data/<cohort>/filtered_pdbs/<id>.cif` + `filtering_report_<cutoff>A[_edia<X>].csv`
 - Report columns: `pdb_id`, `n_waters_before`, `n_waters_moved`, `n_waters_removed`, `n_waters_remaining`
 - Default cutoff: `WATER_PROT_DIST_CUTOFF` in `config.py` (4.0 Å)
 
@@ -63,6 +66,10 @@ uv run scripts/filter_waters_by_distance.py pdb_ids.txt [--cutoff 4.0] [--output
 - The best symmetry-equivalent position for water is found before filtering by distance to protein; `n_waters_moved` counts the water relocations
 - Non-water atoms are always retained
 - All altloc labels (`label_alt_id`) are preserved
+
+**EDIA filtering (optional, off by default):** pass `--edia-cutoff X` (e.g. `0.4` or `0.6`) to additionally drop waters whose EDIAm score is below `X`. EDIA is coordinate-independent, so it is a second keep-mask applied to the distance-surviving waters. Scores are read from the per-structure EDIA JSON (`EDIA_TEMPLATE` in config) and paired to water altlocs positionally, the same contract clustering uses. When enabled, the report adds `n_waters_removed_edia` and `edia_applied` columns and the filename gains an `_edia<X>` suffix.
+- A water with a score below the cutoff, or with no matching score in a JSON that is present, is dropped.
+- A structure whose EDIA JSON is entirely missing keeps all its waters and logs a warning (`edia_applied = False`); pass `--drop-if-no-edia-json` to drop all of that structure's waters instead.
 
 ### Stage 3 — Pairwise alignment
 
@@ -85,6 +92,17 @@ uv run scripts/align_structures.py pdb_ids.txt [--reference PDB_ID] [--input-dir
 - Cα (highest-occupancy altloc) pairing uses BLOSUM62 pairwise sequence alignment
 - Rigid transform is then applied to **all** atoms in the structure
 - All altloc labels (`label_alt_id`) are preserved
+
+### Stage 3.5 — Explore clustering hyperparameters (optional)
+
+```
+uv run scripts/find_clustering_hyperparameters.py pdb_ids.txt [--input-dir DIR] [-o DIR] [--radius 1.4]
+```
+
+- Reads: `aligned_pdbs/`
+- Writes: `data/<cohort>/clustering_hyperparameters.csv` (one row per candidate)
+- Grid-searches HDBSCAN `min_cluster_size` × `min_samples`, scores each candidate (DBCV + stability), and auto-selects a recommendation via min-max rank
+- Use the recommended `min_cluster_size` / `min_samples` as the `--min-cluster-size` / `--min-samples` overrides in Stage 4
 
 ### Stage 4 — Cluster waters
 
@@ -124,13 +142,19 @@ data/<cohort>/
 ├── metadata.csv
 ├── filtered_pdbs/
 │   ├── <id>.cif
-│   └── filtering_report_<cutoff>.csv
+│   └── filtering_report_<cutoff>A[_edia<X>].csv
 ├── aligned_pdbs/
 │   ├── <id>.cif
 │   └── alignment_report_<ref_id>.csv
+├── clustering_hyperparameters.csv
 ├── cluster_members.csv
 └── clusters.csv
 ```
+
+## Additional tools
+
+- `scripts/pairwise_water_metrics.py` — pairwise agreement metrics (precision / recall / F1 / chamfer) between water sets, in cohort, self-refined, or phenix modes.
+- `scripts/phenix/` — phenix re-refinement workflows (batch re-refinement, starting-model alignment, log parsing) used to generate the re-refined CIFs some analyses compare against.
 
 ## Config reference
 

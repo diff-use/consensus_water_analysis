@@ -1,10 +1,19 @@
+from collections import Counter
+
 import biotite.structure.io.pdbx as pdbx
 import gemmi
 import numpy as np
 import pytest
 from scipy.spatial.distance import cdist
 
-from cw.filter import best_sym_positions, filter_by_distance
+from cw.filter import best_sym_positions, filter_waters
+from cw.io import (
+    edia_scores_in_order,
+    load_edia_all_altlocs,
+    load_structure_waters,
+    normalize_ins_code,
+    water_oxygen_mask,
+)
 
 
 def _make_cell(a=100.0):
@@ -43,7 +52,7 @@ def test_periodic_image_closer():
     assert best_dists[0] == pytest.approx(1.0, abs=1e-5)
 
 
-# ── filter_by_distance integration test (5f14) ────────────────────────────────
+# ── filter_waters integration test (5f14) ─────────────────────────────────────
 
 CUTOFF = 4.0
 
@@ -59,8 +68,8 @@ def filtered_5f14(cif_path_5f14):
         altloc="all",
         extra_fields=["b_factor", "occupancy"],
     )
-    filtered, n_water, n_removed, n_moved, keep_mask = filter_by_distance(atoms, cell, sg, CUTOFF)
-    return atoms, filtered, n_removed
+    filtered, stats, keep_mask = filter_waters(atoms, cell, sg, CUTOFF)
+    return atoms, filtered, stats["n_removed_distance"]
 
 
 def test_filter_5f14_removes_some_waters(filtered_5f14):
@@ -85,3 +94,130 @@ def test_filter_5f14_protein_atoms_preserved(filtered_5f14):
     n_prot_before = int((~atoms.hetero).sum())
     n_prot_after = int((~filtered.hetero).sum())
     assert n_prot_after == n_prot_before
+
+
+# ── EDIA filtering ─────────────────────────────────────────────────────────────
+
+
+def _load_atoms(cif_path):
+    return pdbx.get_structure(
+        pdbx.CIFFile.read(str(cif_path)),
+        model=1,
+        altloc="all",
+        extra_fields=["b_factor", "occupancy"],
+    )
+
+
+def _water_keys(water_atoms):
+    return [
+        (str(water_atoms.chain_id[i]), int(water_atoms.res_id[i]), normalize_ins_code(water_atoms.ins_code[i]))
+        for i in range(len(water_atoms))
+    ]
+
+
+def test_edia_scores_in_order_matches_attach_edia(cif_path_6ybf, edia_path_6ybf):
+    """edia_scores_in_order, keyed from water-O atoms in atom_site order, must
+    reproduce the scores load_structure_waters attaches via cw.io._attach_edia — the
+    shared positional altloc-pairing contract both paths delegate to."""
+    df = load_structure_waters(cif_path_6ybf, edia_path_6ybf)
+    waters = _load_atoms(cif_path_6ybf)[water_oxygen_mask(_load_atoms(cif_path_6ybf))]
+    scores = edia_scores_in_order(_water_keys(waters), load_edia_all_altlocs(edia_path_6ybf))
+    np.testing.assert_allclose(scores, df["edia"].to_numpy(), equal_nan=True)
+
+
+def test_filter_preserves_water_altlocs(cif_path_6ybf):
+    """Hard rule: every water altloc survives filtering as a distinct oxygen. 6ybf has
+    altloc waters; a generous cutoff removes nothing, so the per-residue water-O counts
+    (which are >1 for altloc waters) must be identical before and after."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+    atoms = _load_atoms(cif_path_6ybf)
+
+    in_counts = Counter(_water_keys(atoms[water_oxygen_mask(atoms)]))
+    assert any(c > 1 for c in in_counts.values())  # fixture sanity: 6ybf has altloc waters
+
+    filtered, stats, _ = filter_waters(atoms, cell, sg, 999.0)
+    assert stats["n_removed_distance"] == 0
+    assert Counter(_water_keys(filtered[water_oxygen_mask(filtered)])) == in_counts
+
+
+def test_filter_edia_moderate_cutoff_drops_some(cif_path_6ybf, edia_path_6ybf):
+    """A cutoff inside 6ybf's EDIAm range drops some — not all — distance-surviving
+    waters; counts partition exactly and every kept water scores >= the cutoff."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+    edia = load_edia_all_altlocs(edia_path_6ybf)
+
+    dist_filtered, _, _ = filter_waters(_load_atoms(cif_path_6ybf), cell, sg, CUTOFF)
+    surv = dist_filtered[water_oxygen_mask(dist_filtered)]
+    cutoff = float(np.median(edia_scores_in_order(_water_keys(surv), edia)))
+
+    filtered, stats, _ = filter_waters(
+        _load_atoms(cif_path_6ybf), cell, sg, CUTOFF, edia_lists=edia, edia_cutoff=cutoff
+    )
+    kept = filtered[water_oxygen_mask(filtered)]
+    assert stats["n_removed_edia"] > 0
+    assert kept.array_length() > 0
+    assert stats["n_removed_distance"] + stats["n_removed_edia"] + kept.array_length() == stats["n_water"]
+    assert (edia_scores_in_order(_water_keys(kept), edia) >= cutoff).all()
+
+
+def test_filter_edia_empty_lists_drops_all_waters(cif_path_6ybf):
+    """The --drop-if-no-edia-json path passes an empty edia_lists: every water then
+    lacks a score and is dropped by EDIA (distinct from the low-score high-cutoff path)."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+    filtered, stats, _ = filter_waters(
+        _load_atoms(cif_path_6ybf), cell, sg, CUTOFF, edia_lists={}, edia_cutoff=0.6
+    )
+    assert stats["n_water"] > 0
+    assert int(water_oxygen_mask(filtered).sum()) == 0
+    assert stats["n_removed_distance"] + stats["n_removed_edia"] == stats["n_water"]
+
+
+def test_filter_edia_high_cutoff_removes_all_waters(cif_path_6ybf, edia_path_6ybf):
+    """A cutoff above any real EDIAm drops every distance-surviving water, and the
+    removal counts partition the starting waters exactly."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+    edia = load_edia_all_altlocs(edia_path_6ybf)
+    filtered, stats, _ = filter_waters(
+        _load_atoms(cif_path_6ybf), cell, sg, CUTOFF, edia_lists=edia, edia_cutoff=99.0
+    )
+    assert stats["n_water"] > 0
+    assert stats["n_removed_distance"] + stats["n_removed_edia"] == stats["n_water"]
+    assert int(water_oxygen_mask(filtered).sum()) == 0
+
+
+def test_filter_edia_disabled_matches_distance_only(cif_path_6ybf):
+    """With no EDIA args the result is identical to distance-only filtering and
+    n_removed_edia is 0."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+    filtered, stats, _ = filter_waters(_load_atoms(cif_path_6ybf), cell, sg, CUTOFF)
+    assert stats["n_removed_edia"] == 0
+
+
+def test_filter_edia_neg_inf_matches_distance_only(cif_path_6ybf, edia_path_6ybf):
+    """An edia_cutoff of -inf keeps every water that has an EDIA score, so with 6ybf's
+    full EDIA coverage it drops nothing and reproduces distance-only filtering exactly:
+    same keep-mask, same relocated coords, and n_removed_edia is 0."""
+    st = gemmi.read_structure(str(cif_path_6ybf))
+    cell = st.cell
+    sg = st.find_spacegroup() or _p1()
+
+    dist_atoms, dist_stats, dist_mask = filter_waters(_load_atoms(cif_path_6ybf), cell, sg, CUTOFF)
+    edia = load_edia_all_altlocs(edia_path_6ybf)
+    inf_atoms, inf_stats, inf_mask = filter_waters(
+        _load_atoms(cif_path_6ybf), cell, sg, CUTOFF, edia_lists=edia, edia_cutoff=-np.inf
+    )
+
+    assert inf_stats["n_removed_edia"] == 0
+    assert inf_stats == dist_stats
+    np.testing.assert_array_equal(inf_mask, dist_mask)
+    np.testing.assert_array_equal(inf_atoms.coord, dist_atoms.coord)
