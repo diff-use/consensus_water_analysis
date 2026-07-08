@@ -9,6 +9,7 @@ import biotite.structure.io.pdbx as pdbx
 import gemmi
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 # Altloc values PSEUDO treats as "no altloc" when generating MUSE scores.
 # "." is biotite's altloc_id for a water with no alternate conformers.
@@ -28,7 +29,11 @@ def read_cohort(txt_path: Path) -> list[str]:
     """Read PDB IDs from a cohort .txt file.
 
     Blank lines and lines starting with '#' are ignored.
-    Returns lowercase 4-char PDB IDs in file order.
+    Returns lowercase 4-char PDB IDs in file order, de-duplicated (first
+    occurrence kept). A cohort is a set of distinct structures, so a repeated ID
+    would otherwise be loaded twice — double-counting it in every stage and, for
+    clustering, doubling its water density and inflating the cluster_occupancy
+    denominator.
     Each line is split on whitespace; only the first token is used (inline
     comments and extra fields are ignored). Any suffix after the first '_' is
     stripped (e.g. '5F14_final' → '5f14').
@@ -40,7 +45,13 @@ def read_cohort(txt_path: Path) -> list[str]:
             continue
         token = line.split()[0]
         ids.append(token.split("_")[0].lower())
-    return ids
+    unique_ids = list(dict.fromkeys(ids))
+    if len(unique_ids) != len(ids):
+        logger.warning(
+            f"{len(ids) - len(unique_ids)} duplicate PDB ID(s) in {txt_path.name}; "
+            "keeping first of each"
+        )
+    return unique_ids
 
 
 def cif_path_for(pdb_id: str, all_pdb_redo_dir: Path | str, cif_template: str) -> Path:

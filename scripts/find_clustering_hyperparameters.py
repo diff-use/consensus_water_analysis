@@ -5,9 +5,15 @@ reproducibility (stability), and picks the candidate whose worse rank across the
 (min-max-rank). Writes the full per-candidate scores table to clustering_hyperparameters.csv
 with a `recommended` column marking the winner, and prints a human summary.
 
-Run this BEFORE scripts/cluster_waters.py to choose params, then commit them to config.py or
-pass them via --min-cluster-size/--min-samples. Reads pooled water oxygens straight from the
-aligned CIFs (same collection as cluster_waters.py), so it depends only on the alignment stage.
+The recommended candidate is already clustered during the grid search, so by default this
+script also writes clusters.csv and cluster_members.csv from its labels — identical to running
+cluster_waters.py at the recommended --min-cluster-size/--min-samples, just without the extra
+fit. Pass --no-write-clusters to only write the scores table (leaving any existing
+clusters.csv / cluster_members.csv untouched). Re-run cluster_waters.py only to cluster at
+different (non-recommended) params.
+
+Reads pooled water oxygens straight from the aligned CIFs (same collection as cluster_waters.py),
+so it depends only on the alignment stage.
 
 Usage:
     uv run scripts/find_clustering_hyperparameters.py <cohort.txt> [--input-dir <dir>] [-o <dir>]
@@ -22,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from loguru import logger
 
 import config
-from cw.cluster import select_hdbscan_params
+from cw.cluster import build_cluster_tables, select_hdbscan_params
 from cw.io import collect_aligned_waters, read_cohort, resolve_aligned_water_inputs
 
 
@@ -51,6 +57,12 @@ def main() -> None:
         default=config.CLUSTER_MEMBER_RADIUS,
         metavar="Å",
         help=f"Cluster-membership radius (default: config.CLUSTER_MEMBER_RADIUS = {config.CLUSTER_MEMBER_RADIUS})",
+    )
+    parser.add_argument(
+        "--no-write-clusters",
+        action="store_true",
+        help="Only write clustering_hyperparameters.csv; skip auto-saving clusters.csv / "
+        "cluster_members.csv for the recommended params (default: auto-save them)",
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")
@@ -109,7 +121,10 @@ def main() -> None:
         logger.error("No water records found — check aligned CIFs")
         sys.exit(1)
 
-    n_total_structures = int(waters["pdb_id"].nunique())
+    # Denominator for cluster_occupancy — count found aligned CIFs, matching cluster_waters.py
+    # (not waters["pdb_id"].nunique()) so the two scripts produce identical clusters.csv. this
+    # would count structures without waters.
+    n_total_structures = n_found
 
     logger.info("Grid-searching HDBSCAN params (one fit per candidate)...")
     result = select_hdbscan_params(
@@ -128,6 +143,23 @@ def main() -> None:
     scores_path = out_dir / "clustering_hyperparameters.csv"
     scores.to_csv(scores_path, index=False)
     logger.info(f"clustering_hyperparameters.csv: {len(scores)} candidates  →  {scores_path}")
+
+    if args.no_write_clusters:
+        logger.info("Skipping clusters.csv / cluster_members.csv (--no-write-clusters)")
+    else:
+        logger.info(f"Applying {args.radius} Å radius filter to the recommended clustering...")
+        members_df, clusters_df = build_cluster_tables(
+            waters,
+            result["labels"],
+            radius=args.radius,
+            n_total_structures=n_total_structures,
+        )
+        members_path = out_dir / "cluster_members.csv"
+        clusters_path = out_dir / "clusters.csv"
+        members_df.to_csv(members_path, index=False)
+        clusters_df.to_csv(clusters_path, index=False)
+        logger.info(f"cluster_members.csv: {len(members_df):,} rows  →  {members_path}")
+        logger.info(f"clusters.csv:        {len(clusters_df):,} rows  →  {clusters_path}")
 
     _print_summary(waters, n_total_structures, result)
 
