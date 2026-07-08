@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
 import gemmi
 import numpy as np
 import requests
+from loguru import logger
 
 _RCSB_ENTRY_URL = "https://data.rcsb.org/rest/v1/core/entry/{pdb_id}"
 _WATER_COMPS = frozenset({"HOH", "WAT", "DOD"})
+_PDB_CODE_RE = re.compile(r"\b([0-9][A-Za-z0-9]{3})\b")
+
+
+def _pdb_codes(values: list[str]) -> list[str]:
+    """Lowercased PDB codes found in free-text starting-model strings, de-duped in order."""
+    return list(
+        dict.fromkeys(
+            code.lower() for v in values if v for code in _PDB_CODE_RE.findall(v)
+        )
+    )
 
 
 def max_cell_diff(cell_a: gemmi.UnitCell, cell_b: gemmi.UnitCell) -> float:
@@ -112,16 +124,48 @@ def metadata_row(cif_path: Path) -> dict:
     # --- RCSB Data API: experiment condition and starting model ---
     entry = _fetch_rcsb_entry(pdb_id)
     if entry is not None:
-        refine_blocks = entry.get("refine") or []
-        sm_values = list(
-            dict.fromkeys(
-                v.strip()
-                for r in refine_blocks
-                for v in [r.get("pdbx_starting_model")]
-                if v and v.strip()
+        # Starting model lives in one of two categories depending on the entry:
+        #   _refine.pdbx_starting_model                    → refine[].pdbx_starting_model
+        #   _pdbx_initial_refinement_model.accession_code  → pdbx_initial_refinement_model[].accession_code
+        # Starting model lives in one of two categories depending on the entry:
+        #   _pdbx_initial_refinement_model.accession_code  → bare PDB code(s)
+        #   _refine.pdbx_starting_model                    → free text ("PDB entry 1CIL", "none", …)
+        # accession_code is the structured field and is never missing a code the
+        # free-text field has, so prefer it; parse the free text for codes only as a
+        # fallback, and keep the raw text when it carries no code ("none", "in house …").
+        refine_raw = [
+            v.strip()
+            for r in (entry.get("refine") or [])
+            for v in [r.get("pdbx_starting_model")]
+            if v and v.strip()
+        ]
+        accession_raw = [
+            v.strip()
+            for m in (entry.get("pdbx_initial_refinement_model") or [])
+            for v in [m.get("accession_code")]
+            if v and v.strip()
+        ]
+
+        refine_codes = _pdb_codes(refine_raw)
+        accession_codes = _pdb_codes(accession_raw)
+        if refine_codes and accession_codes and set(refine_codes) != set(accession_codes):
+            logger.warning(
+                f"{pdb_id}: starting model disagreement — "
+                f"_refine.pdbx_starting_model={refine_codes} vs "
+                f"_pdbx_initial_refinement_model.accession_code={accession_codes} "
+                f"(keeping both)"
             )
-        )
-        starting_model = " | ".join(v.lower() for v in sm_values) if sm_values else "<missing>"
+
+        if accession_codes or refine_codes:
+            # Union, accession first (preferred). When they agree this collapses to the
+            # single code; when they disagree both are kept so the conflict is visible
+            # in the CSV, not just the terminal warning.
+            sm_values = list(dict.fromkeys(accession_codes + refine_codes))
+        elif refine_raw:
+            sm_values = list(dict.fromkeys(v.lower() for v in refine_raw))
+        else:
+            sm_values = []
+        starting_model = " | ".join(sm_values) if sm_values else "<missing>"
 
         grow_blocks = entry.get("exptl_crystal_grow") or []
         grow_details = [g["pdbx_details"] for g in grow_blocks if g.get("pdbx_details")]
