@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # 02 — refinement + water-agreement heatmaps (combined)
 
-    Coalesces notebooks **05** (scalar refinement metrics — `r_free`, `n_water`)
+    Coalesces deprecated notebooks **05** (scalar refinement metrics — `r_free`, `n_water`)
     and **06** (water-set agreement — precision / recall / chamfer) into one view,
     and adds a single **baseline selector** shared by both:
 
@@ -163,15 +163,37 @@ def _(Path, VARIANTS, meta_stem_ui, mo, phenix_dir_ui):
         label="Δ baseline",
         inline=True,
     )
-    mo.vstack([mo.md(f"Discovered scalar variants: `{_avail}`"), variant_ui, baseline_ui])
-    return baseline_ui, variant_ui
+    # Axis-ordering key: None → deposited PDB-REDO num_water (metadata.csv); else the
+    # phenix self-refinement n_water diagonal of the named variant (stripped or not).
+    _sort_opts = {"PDB-REDO (num_water)": None}
+    for _v in _avail:
+        _sort_opts[f"phenix self-ref n_water ({_v})"] = _v
+    sort_by_ui = mo.ui.dropdown(
+        options=_sort_opts, value="PDB-REDO (num_water)", label="Sort axes by (ascending water count)"
+    )
+    mo.vstack([mo.md(f"Discovered scalar variants: `{_avail}`"), variant_ui, baseline_ui, sort_by_ui])
+    return baseline_ui, sort_by_ui, variant_ui
 
 
 @app.cell
-def _(Path, metadata_ui, pd):
-    # pdb_id -> original deposited water count; the single ordering key for every
-    # matrix axis so all panels stay subtractable. Empty if metadata is missing.
-    if Path(metadata_ui.value).exists():
+def _(Path, meta_stem_ui, metadata_ui, pd, phenix_dir_ui, sort_by_ui):
+    # pdb_id -> water count; the single ordering key for every matrix axis so all
+    # panels stay subtractable. The "Sort axes by" selector picks the source:
+    #   None    -> deposited PDB-REDO num_water (metadata.csv), the original behaviour.
+    #   variant -> phenix self-refinement n_water diagonal (<pdb>_refined_by_<pdb>) from
+    #              that variant's scalar meta CSV (stripped or not), independent of which
+    #              variants are toggled for display.
+    # Empty Series (→ sorted-id fallback in order_by_count) if the source is missing.
+    _variant = sort_by_ui.value
+    if _variant is not None:
+        _p = Path(phenix_dir_ui.value) / f"{meta_stem_ui.value}_{_variant}.csv"
+        if _p.exists():
+            _d = pd.read_csv(_p)
+            _self = _d[_d["mtz_source"] == _d["starting_model"]]
+            water_counts = pd.to_numeric(_self.set_index("mtz_source")["n_water"], errors="coerce")
+        else:
+            water_counts = pd.Series(dtype=float)
+    elif Path(metadata_ui.value).exists():
         _meta = pd.read_csv(metadata_ui.value)
         water_counts = pd.to_numeric(_meta.set_index("pdb_id")["num_water"], errors="coerce")
     else:
@@ -191,7 +213,8 @@ def _(mo):
     Both metrics are symmetric (`metric(a,b) == metric(b,a)`), so a single matrix
     carries both triangles — **lower = pairwise Cα RMSD after alignment (Å)**,
     **upper = max unit-cell edge difference (%)** — each on its own colour scale.
-    Axes are sorted by original water count.
+    Axes follow the **Sort axes by** selector (default: original PDB-REDO water count;
+    optionally a phenix self-refinement `n_water`, stripped or not).
     """)
     return
 
@@ -373,15 +396,35 @@ def _(mo):
     mo.md(r"""
     ### Self-refinement vs original — diagonal-only heatmaps
 
-    Square `pdb × pdb` heatmaps that populate **only the leading diagonal** (each
-    structure against itself), independent of the Δ-baseline selector. The first panel
-    is the **original** deposited value per structure (`n_water` / `r_free` / `r_work`
-    from `metadata.csv`); each following panel is the **Δ self-refined − original** for
-    one variant — the self-refinement `<pdb>_refined_by_<pdb>` minus the deposited
-    value, isolating the refinement protocol's own effect on each structure. Off-diagonal
-    cells are blank by construction. Metric follows the **Scalar metric** dropdown above.
+    Per-structure self-comparison (each structure against itself), independent of the
+    Δ-baseline selector. The first panel is the **original** deposited value per
+    structure (`n_water` / `r_free` / `r_work` from `metadata.csv`); each following panel
+    is one variant's self-refinement `<pdb>_refined_by_<pdb>`. Metric follows the
+    **Scalar metric** dropdown above.
+
+    Two controls below:
+
+    - **Diagonal layout** — `square` renders the full `pdb × pdb` matrix with only the
+      leading diagonal filled (off-diagonal blank); `row` / `column` collapse it to a
+      compact strip of just the diagonal values.
+    - **phenix cells** — `delta` shows each variant as **Δ self-refined − original** (its
+      own diverging scale per panel, deposited panel on its own viridis scale); `original`
+      shows the **raw self-refined value** instead — same units as the deposited panel, so
+      **all panels share one colorbar**.
     """)
     return
+
+
+@app.cell
+def _(mo):
+    sa_diag_orient_ui = mo.ui.dropdown(
+        options=["square", "row", "column"], value="square", label="Diagonal layout"
+    )
+    sa_diag_mode_ui = mo.ui.radio(
+        options=["delta", "original"], value="delta", label="phenix cells", inline=True
+    )
+    mo.hstack([sa_diag_orient_ui, sa_diag_mode_ui], justify="start")
+    return sa_diag_mode_ui, sa_diag_orient_ui
 
 
 @app.cell
@@ -395,6 +438,8 @@ def _(
     np,
     pd,
     sa_df,
+    sa_diag_mode_ui,
+    sa_diag_orient_ui,
     sa_metric_ui,
     sa_order,
     variant_ui,
@@ -405,31 +450,51 @@ def _(
     mo.stop(_orig_col is None, mo.md(f"No original column mapped for `{_metric}`."))
     mo.stop(not Path(metadata_ui.value).exists(), mo.md(f"metadata.csv not found: `{metadata_ui.value}`"))
 
+    # A diagonal Series → the panel matrix in the chosen layout: the full pdb×pdb matrix
+    # with only the diagonal filled (square), or a compact 1×N / N×1 strip of just the
+    # diagonal values (row / column).
+    def _shape(series):
+        _s = pd.Series(series).reindex(sa_order)
+        if sa_diag_orient_ui.value == "row":
+            return pd.DataFrame([_s.to_numpy()], index=[""], columns=list(sa_order))
+        if sa_diag_orient_ui.value == "column":
+            return pd.DataFrame(_s.to_numpy(), index=list(sa_order), columns=[""])
+        return diagonal_matrix(_s, sa_order)
+
     _orig = pd.to_numeric(
         pd.read_csv(metadata_ui.value).set_index("pdb_id")[_orig_col], errors="coerce"
     ).reindex(sa_order)
-
-    _label = f"PDB-REDO {_metric}"
-    _panels = {_label: diagonal_matrix(_orig, sa_order)}
-    _specs = {
-        _label: {
-            "label": _label, "cbar_label": _metric, "cmap": "viridis",
-            "vmin": float(np.nanmin(_orig.to_numpy())), "vmax": float(np.nanmax(_orig.to_numpy())),
-        }
+    _self = {
+        _v: sa_df[(sa_df["variant"] == _v) & (sa_df["mtz_source"] == sa_df["starting_model"])]
+        .set_index("mtz_source")[_metric]
+        .reindex(sa_order)
+        for _v in variant_ui.value
     }
-    for _v in variant_ui.value:
-        _self = (
-            sa_df[(sa_df["variant"] == _v) & (sa_df["mtz_source"] == sa_df["starting_model"])]
-            .set_index("mtz_source")[_metric]
-            .reindex(sa_order)
-        )
-        _delta = _self - _orig
-        _key = f"phenix ({_v}) − PDB-REDO"
-        _panels[_key] = diagonal_matrix(_delta, sa_order)
-        _lim = float(np.nanmax(np.abs(_delta.to_numpy()))) or 1.0
-        _specs[_key] = {"label": _key, "cbar_label": f"Δ{_metric}", "cmap": "RdBu_r", "vmin": -_lim, "vmax": _lim}
+    _orig_label = f"PDB-REDO {_metric}"
 
-    make_panels(_panels, specs=_specs, fmt=_fmt, xlabel="", ylabel="")
+    if sa_diag_mode_ui.value == "original":
+        # Raw self-refined values beside the deposited value — same units, so every panel
+        # shares one viridis colorbar.
+        _panels = {_orig_label: _shape(_orig)}
+        for _v in variant_ui.value:
+            _panels[f"phenix ({_v})"] = _shape(_self[_v])
+        _fig = make_panels(_panels, cbar_label=_metric, cmap="viridis", shared_cbar=True, fmt=_fmt, xlabel="", ylabel="")
+    else:
+        _panels = {_orig_label: _shape(_orig)}
+        _specs = {
+            _orig_label: {
+                "label": _orig_label, "cbar_label": _metric, "cmap": "viridis",
+                "vmin": float(np.nanmin(_orig.to_numpy())), "vmax": float(np.nanmax(_orig.to_numpy())),
+            }
+        }
+        for _v in variant_ui.value:
+            _delta = _self[_v] - _orig
+            _key = f"phenix ({_v}) − PDB-REDO"
+            _panels[_key] = _shape(_delta)
+            _lim = float(np.nanmax(np.abs(_delta.to_numpy()))) or 1.0
+            _specs[_key] = {"label": _key, "cbar_label": f"Δ{_metric}", "cmap": "RdBu_r", "vmin": -_lim, "vmax": _lim}
+        _fig = make_panels(_panels, specs=_specs, fmt=_fmt, xlabel="", ylabel="")
+    _fig
     return
 
 
@@ -439,7 +504,7 @@ def _(mo):
     ### Cross-refinement matrix
 
     Rows = **starting model** (`starting_model`), columns = **mtz data used** (`mtz_source`),
-    both sorted by original water count. The leading diagonal is each structure's
+    both ordered by the **Sort axes by** selector. The leading diagonal is each structure's
     self-refinement (shown on its own above).
     """)
     return
@@ -680,6 +745,59 @@ def _(
 @app.cell
 def _(mo):
     mo.md(r"""
+    ### Exploratory — precision vs Δ water count (predictor − reference)
+
+    Does reference-agreement **precision** fall off linearly as the predictor's
+    water count diverges from the reference's? Scatter of precision (original
+    reference, `reference_pairwise_metrics.csv`) against
+    `num_water(predictor) − num_water(reference)`, one point per off-diagonal
+    `(reference, predictor)` pair, with an ordinary-least-squares fit and Pearson
+    `r`. Self-comparisons (Δ = 0) are excluded. Water counts follow the **Sort
+    axes by** selector, same as the heatmaps.
+    """)
+    return
+
+
+@app.cell
+def _(mo, np, plt, sb_ref_orig, water_counts):
+    mo.stop(sb_ref_orig is None, mo.md("_`reference_pairwise_metrics.csv` not found — nothing to plot._"))
+    mo.stop("precision" not in sb_ref_orig.columns, mo.md("_No `precision` column in the reference metrics._"))
+
+    _pairs = sb_ref_orig[sb_ref_orig["structure_ref"] != sb_ref_orig["structure_mobile"]].copy()
+    _pairs["reference_water"] = _pairs["structure_ref"].map(water_counts)
+    _pairs["predictor_water"] = _pairs["structure_mobile"].map(water_counts)
+    _pairs["delta_water"] = _pairs["predictor_water"] - _pairs["reference_water"]
+    _pairs = _pairs.dropna(subset=["delta_water", "precision"])
+    mo.stop(len(_pairs) < 2, mo.md("_Not enough paired points (need water counts for both members)._"))
+
+    delta_water = _pairs["delta_water"].to_numpy(dtype=float)
+    precision = _pairs["precision"].to_numpy(dtype=float)
+    _slope, _intercept = np.polyfit(delta_water, precision, 1)
+    pearson_r = float(np.corrcoef(delta_water, precision)[0, 1])
+
+    _fig, _ax = plt.subplots(figsize=(6, 4.5))
+    _ax.scatter(delta_water, precision, s=18, alpha=0.5, edgecolor="none")
+    _line_x = np.linspace(delta_water.min(), delta_water.max(), 100)
+    _ax.plot(
+        _line_x, _slope * _line_x + _intercept, color="crimson", lw=1.5,
+        label=(
+            f"y = {_slope:.2e}·x + {_intercept:.3f}\n"
+            f"r = {pearson_r:.3f}   r² = {pearson_r ** 2:.3f}   n = {len(_pairs)}"
+        ),
+    )
+    _ax.axvline(0, color="gray", lw=0.7, ls="--")
+    _ax.set_xlabel("Δ water count (predictor − reference)")
+    _ax.set_ylabel("precision")
+    _ax.set_title("Reference-agreement precision vs Δ water count")
+    _ax.legend(loc="best", fontsize=8, frameon=False)
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
     ### Self-re-refinement vs PDB-REDO — diagonal-only agreement
 
     Square `pdb × pdb` heatmaps populated **only on the leading diagonal**: each cell
@@ -846,24 +964,161 @@ def _(
 @app.cell
 def _(mo):
     mo.md(r"""
-    ### Δ agreement — phenix − selected reference
+    ### phenix agreement — raw matrices (before Δ)
 
-    `metric(phenix) − metric(reference)`, one row of metric panels per variant,
-    diverging scale per panel (symmetric about 0). **Ground truth is held fixed**
-    (original-a, or a_refined_by_a for re-refined), so the Δ isolates the predictor:
-    `b_refined_by_a` (cross-model) vs the baseline predictor. For precision/recall/F1 a
-    **positive** Δ (red) means the cross-refined predictor agrees with the reference
-    waters *better* than the baseline does; for chamfer/RMSD (lower is better) positive
-    = worse. For **re-refined** the diagonal is 0 by construction (self vs self on both
-    sides); for **original** the diagonal is `agreement(original-a, a_refined_by_a) − 1`
-    — the protocol's own effect on the self comparison.
+    The **un-subtracted** phenix matrices that feed the Δ panels below, so the
+    absolute agreement is visible on its own. Cell `(a, b)` is
+    `metric(reference-a ↔ b_refined_by_a)`, ground truth tracking the Δ baseline
+    (`original-a` for **original**, `a_refined_by_a` for **re-refined**). Same source
+    and layout as the Δ cell, minus the subtraction. Each metric's colour range is
+    **shared across all variant blocks**, taken from the pooled data range (override
+    either bound per metric in the control below). This is the same content as the
+    *phenix cross-refinement matrix* cell higher up, placed here for direct
+    comparison with the Δ.
     """)
     return
 
 
 @app.cell
+def _(mo, sb_metric_ui):
+    # Optional manual override of the shared colour range, one (vmin, vmax) text pair
+    # per selected metric. Blank = auto from the pooled data range across all blocks.
+    raw_range_ui = mo.ui.dictionary({
+        _k: mo.ui.dictionary({
+            "vmin": mo.ui.text(value="", placeholder="auto", label=f"{_k} vmin"),
+            "vmax": mo.ui.text(value="", placeholder="auto", label=f"{_k} vmax"),
+        })
+        for _k in sb_metric_ui.value
+    })
+    mo.vstack([
+        mo.md("**Manual shared range** — blank = auto from the data range across all blocks."),
+        raw_range_ui,
+    ])
+    return (raw_range_ui,)
+
+
+@app.cell
+def _(
+    METRICS,
+    baseline_ui,
+    make_panels,
+    mo,
+    np,
+    raw_range_ui,
+    sb_metric_ui,
+    sb_order,
+    sb_phenix,
+    sb_phenix_selfref,
+    to_matrix,
+    variant_ui,
+):
+    # Un-subtracted phenix matrices, same baseline-tracking source as the Δ cell:
+    # original-a waters for "original", a_refined_by_a for "re-refined".
+    _orig = baseline_ui.value == "original"
+    _phx_src = sb_phenix if _orig else sb_phenix_selfref
+    _ground = "original-a" if _orig else "a_refined_by_a"
+    mo.stop(
+        not _phx_src,
+        mo.md(f"⏳ No phenix CSVs for the **{baseline_ui.value}** grounding"
+              + ("" if _orig else " — run the script with `--ref-from-self-refined`.")),
+    )
+    mo.stop(not sb_metric_ui.value, mo.md("Select at least one agreement metric above."))
+
+    # Build every present variant's matrices, then share (vmin, vmax) per metric across
+    # all of them from the actual data range; a manual entry overrides either bound.
+    _mats_by_variant = [
+        (_v, {_k: to_matrix(_phx_src[_v], _k, sb_order, index="reference", columns="predictor") for _k in sb_metric_ui.value})
+        for _v in variant_ui.value if _v in _phx_src
+    ]
+
+    def _override(_k, _bound, _auto):
+        _raw = raw_range_ui.value.get(_k, {}).get(_bound, "") if raw_range_ui.value else ""
+        try:
+            return float(_raw) if str(_raw).strip() != "" else _auto
+        except ValueError:
+            return _auto
+
+    _specs = {}
+    for _k in sb_metric_ui.value:
+        _vals = np.concatenate([m[_k].to_numpy().ravel() for _, m in _mats_by_variant]) if _mats_by_variant else np.array([])
+        _vals = _vals[np.isfinite(_vals)]
+        _auto_min = float(_vals.min()) if _vals.size else METRICS[_k].get("vmin")
+        _auto_max = float(_vals.max()) if _vals.size else METRICS[_k].get("vmax")
+        _specs[_k] = {**METRICS[_k], "vmin": _override(_k, "vmin", _auto_min), "vmax": _override(_k, "vmax", _auto_max)}
+
+    mo.vstack([
+        mo.vstack([
+            mo.md(f"**phenix — `{_v}`  (ground truth = `{_ground}`)**"),
+            make_panels(
+                _mats, specs=_specs, mask_diagonal=not _orig,
+                xlabel="mtz used to re-refine", ylabel="starting model",
+            ),
+        ])
+        for _v, _mats in _mats_by_variant
+    ])
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### Δ agreement — phenix − per-panel reference
+
+    `metric(phenix) − metric(reference)`, one row of metric panels per variant,
+    diverging scale per panel (symmetric about 0). The phenix grounding still tracks the
+    **Δ baseline** radio (original-a, or a_refined_by_a for re-refined), but the
+    subtracted reference is now chosen **per panel** in the control below: the original
+    reference or *any* variant's self-refinement — so cross pairings like
+    `auto` cross-refine − `stripped` self-refinement are possible. For precision/recall/F1
+    a **positive** Δ (red) means the phenix predictor agrees with the reference waters
+    *better* than the baseline does; for chamfer/RMSD (lower is better) positive = worse.
+
+    **Ground truth is held fixed** on both sides only when a re-refined panel subtracts
+    its *own* variant's self-refinement; any cross-variant pairing (e.g. `auto` phenix −
+    `stripped` self-refinement) subtracts against a different ground truth, so read the
+    off-diagonal as a blended predictor + ground-truth effect. The **diagonal** is a
+    separate matter: under the **re-refined** grounding it is 0 for *every* baseline
+    (both sides collapse to a self-vs-self comparison → perfect → cancel) and is masked;
+    under the **original** grounding it is `agreement(original-a, a_refined_by_a) − 1`
+    and is shown.
+    """)
+    return
+
+
+@app.cell
+def _(baseline_ui, mo, sb_ref_orig, sb_selfref, variant_ui):
+    # Per-panel Δ baseline: each phenix variant panel may subtract the original
+    # reference OR any variant's self-refinement (e.g. auto phenix − stripped
+    # self-refinement). Default reproduces the old ground-truth-fixed behaviour:
+    # original ref for the "original" baseline, same-variant self-ref otherwise.
+    _opts = {}
+    if sb_ref_orig is not None:
+        _opts["original"] = ("orig", None)
+    for _w in sb_selfref:
+        _opts[f"self-refined: {_w}"] = ("selfref", _w)
+
+    def _default(_v):
+        if baseline_ui.value == "original" and sb_ref_orig is not None:
+            return "original"
+        if _v in sb_selfref:
+            return f"self-refined: {_v}"
+        return next(iter(_opts), None)
+
+    delta_baseline_ui = mo.ui.dictionary({
+        _v: mo.ui.dropdown(options=_opts, value=_default(_v), label=f"`{_v}` panel −")
+        for _v in variant_ui.value
+    })
+    mo.vstack([
+        mo.md("**Per-panel Δ baseline** — the reference each phenix panel subtracts."),
+        delta_baseline_ui,
+    ])
+    return (delta_baseline_ui,)
+
+
+@app.cell
 def _(
     baseline_ui,
+    delta_baseline_ui,
     make_panels,
     mo,
     np,
@@ -876,10 +1131,14 @@ def _(
     to_matrix,
     variant_ui,
 ):
-    # Hold ground truth fixed on both sides of the subtraction:
-    #   original   → phenix(orig-a, b_refined_by_a) − ref(orig-a, orig-b)
-    #   re-refined → phenix(a_ref_by_a, b_refined_by_a) − ref(a_ref_by_a, b_ref_by_b)
-    # so Δ isolates the predictor (cross-model vs baseline) alone.
+    # Phenix grounding tracks the Δ-baseline radio (original-a vs a_refined_by_a); the
+    # subtracted reference is chosen PER PANEL by the control above, so mismatched
+    # pairings like auto-cross-refine − stripped-self-refine are possible. Under the
+    # re-refined grounding the diagonal (i, i) is 0 by construction for ANY baseline:
+    # the phenix diagonal is i's self-refinement vs itself and every reference diagonal
+    # is also a self-vs-self comparison, so both sides are perfect and cancel. It is
+    # therefore masked whenever the grounding is re-refined; under the original
+    # grounding the diagonal is agreement(original-i, i_refined_by_i) − 1 and is shown.
     _orig = baseline_ui.value == "original"
     _phx_src = sb_phenix if _orig else sb_phenix_selfref
     mo.stop(
@@ -889,26 +1148,39 @@ def _(
     )
     mo.stop(not sb_metric_ui.value, mo.md("Select at least one agreement metric above."))
 
-    # First pass: build every variant's Δ matrices. Second pass renders them — but the
-    # colour range is resolved per metric ACROSS variants, so the same metric (e.g.
-    # Δ precision) shares one symmetric scale for auto vs stripped.
+    def _ref_frame(_choice):
+        _kind, _key = _choice
+        return sb_ref_orig if _kind == "orig" else sb_selfref.get(_key)
+
+    def _label(_choice):
+        _kind, _key = _choice
+        return "original" if _kind == "orig" else f"self-refined: {_key}"
+
+    # First pass: build every panel's Δ matrices (phenix − its chosen baseline). Second
+    # pass renders them — the colour range is resolved per metric ACROSS panels, so the
+    # same metric (e.g. Δ precision) shares one symmetric scale.
     _per_variant = []
     for _v in variant_ui.value:
         if _v not in _phx_src:
             continue
-        _ref = sb_ref_orig if _orig else sb_selfref.get(_v)
+        _choice = delta_baseline_ui.value.get(_v)
+        if _choice is None:
+            _per_variant.append((_v, None, None, False))
+            continue
+        _ref = _ref_frame(_choice)
+        _mask = not _orig
         if _ref is None:
-            _per_variant.append((_v, None))
+            _per_variant.append((_v, None, _label(_choice), _mask))
             continue
         _diffs = {}
         for _k in sb_metric_ui.value:
             _phx = to_matrix(_phx_src[_v], _k, sb_order, index="reference", columns="predictor")
             _rm = to_matrix(_ref, _k, sb_order, index="structure_ref", columns="structure_mobile")
             _diffs[_k] = _phx - _rm
-        _per_variant.append((_v, _diffs))
+        _per_variant.append((_v, _diffs, _label(_choice), _mask))
 
-    # Per-metric symmetric limit = max |Δ| over all variants that have data.
-    _present = [d for _, d in _per_variant if d is not None]
+    # Per-metric symmetric limit = max |Δ| over all panels that have data.
+    _present = [d for _, d, _, _ in _per_variant if d is not None]
     _specs = {}
     for _k in sb_metric_ui.value:
         _lims = [
@@ -920,13 +1192,15 @@ def _(
         _specs[_k] = {"label": f"Δ {_k}", "cmap": "coolwarm", "vmin": -_lim, "vmax": _lim}
 
     _rows = []
-    for _v, _diffs in _per_variant:
+    for _v, _diffs, _lbl, _mask in _per_variant:
         if _diffs is None:
-            _rows.append(mo.md(f"_`{_v}`: baseline ({baseline_ui.value}) reference missing._"))
+            _rows.append(mo.md(
+                f"_`{_v}`: baseline (`{_lbl}`) reference missing._" if _lbl else f"_`{_v}`: no baseline selected._"
+            ))
             continue
         _rows.append(mo.vstack([
-            mo.md(f"**Δ `{_v}`  (phenix − {baseline_ui.value}, ground truth fixed)**"),
-            make_panels(_diffs, specs=_specs, fmt="+.2f", mask_diagonal=not _orig, xlabel="mtz used to re-refine", ylabel="starting model"),
+            mo.md(f"**Δ `{_v}`  (phenix − `{_lbl}`)**"),
+            make_panels(_diffs, specs=_specs, fmt="+.2f", mask_diagonal=_mask, xlabel="mtz used to re-refine", ylabel="starting model"),
         ]))
     mo.vstack(_rows)
     return
