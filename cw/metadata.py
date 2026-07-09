@@ -78,6 +78,73 @@ def _fetch_rcsb_entry(pdb_id: str) -> dict | None:
     return None
 
 
+def resolve_starting_model(entry: dict | None, pdb_id: str = "?") -> tuple[list[str], str, str]:
+    """Resolve the starting model from an RCSB entry JSON.
+
+    Returns ``(codes, status, csv_value)``:
+      - ``codes``      resolved PDB codes (accession-preferred union), lowercased.
+      - ``status``     ``'ok'`` (exactly one code) | ``'conflict'`` (>1 code, or the
+                       two RCSB fields disagree) | ``'text'`` (free text, no code) |
+                       ``'missing'`` (no entry / no field).
+      - ``csv_value``  the exact string stored in the metadata.csv ``starting_model``
+                       column: ``" | ".join(...)`` of codes (or lowercased free text),
+                       or ``"<missing>"``.
+
+    Starting model lives in one of two RCSB categories:
+      _pdbx_initial_refinement_model.accession_code → bare PDB code(s)
+      _refine.pdbx_starting_model                   → free text ("PDB entry 1CIL", "none", …)
+    accession_code is the structured field and never omits a code the free-text field
+    carries, so it is preferred; the free text is parsed for codes only as a fallback,
+    and its raw value is kept when it carries no code ("none", "in house …").
+    """
+    if entry is None:
+        return [], "missing", "<missing>"
+
+    refine_raw = [
+        v.strip()
+        for r in (entry.get("refine") or [])
+        for v in [r.get("pdbx_starting_model")]
+        if v and v.strip()
+    ]
+    accession_raw = [
+        v.strip()
+        for m in (entry.get("pdbx_initial_refinement_model") or [])
+        for v in [m.get("accession_code")]
+        if v and v.strip()
+    ]
+
+    refine_codes = _pdb_codes(refine_raw)
+    accession_codes = _pdb_codes(accession_raw)
+    conflict = bool(
+        refine_codes and accession_codes and set(refine_codes) != set(accession_codes)
+    )
+    if conflict:
+        logger.warning(
+            f"{pdb_id}: starting model disagreement — "
+            f"_refine.pdbx_starting_model={refine_codes} vs "
+            f"_pdbx_initial_refinement_model.accession_code={accession_codes} "
+            f"(keeping both)"
+        )
+
+    if accession_codes or refine_codes:
+        # Union, accession first (preferred). When they agree this collapses to the
+        # single code; when they disagree both are kept so the conflict is visible
+        # in the CSV, not just the terminal warning.
+        codes = list(dict.fromkeys(accession_codes + refine_codes))
+        status = "conflict" if (conflict or len(codes) > 1) else "ok"
+        return codes, status, " | ".join(codes)
+    if refine_raw:
+        texts = list(dict.fromkeys(v.lower() for v in refine_raw))
+        return [], "text", " | ".join(texts)
+    return [], "missing", "<missing>"
+
+
+def fetch_starting_model(pdb_id: str) -> tuple[list[str], str]:
+    """RCSB lookup for one PDB → ``(codes, status)`` (see ``resolve_starting_model``)."""
+    codes, status, _ = resolve_starting_model(_fetch_rcsb_entry(pdb_id), pdb_id)
+    return codes, status
+
+
 def metadata_row(cif_path: Path) -> dict:
     """Extract one metadata CSV row from a local mmCIF file + RCSB API.
 
@@ -123,55 +190,12 @@ def metadata_row(cif_path: Path) -> dict:
 
     # --- RCSB Data API: experiment condition and starting model ---
     entry = _fetch_rcsb_entry(pdb_id)
+    _codes, _status, starting_model = resolve_starting_model(entry, pdb_id)
     if entry is not None:
-        # Starting model lives in one of two categories depending on the entry:
-        #   _refine.pdbx_starting_model                    → refine[].pdbx_starting_model
-        #   _pdbx_initial_refinement_model.accession_code  → pdbx_initial_refinement_model[].accession_code
-        # Starting model lives in one of two categories depending on the entry:
-        #   _pdbx_initial_refinement_model.accession_code  → bare PDB code(s)
-        #   _refine.pdbx_starting_model                    → free text ("PDB entry 1CIL", "none", …)
-        # accession_code is the structured field and is never missing a code the
-        # free-text field has, so prefer it; parse the free text for codes only as a
-        # fallback, and keep the raw text when it carries no code ("none", "in house …").
-        refine_raw = [
-            v.strip()
-            for r in (entry.get("refine") or [])
-            for v in [r.get("pdbx_starting_model")]
-            if v and v.strip()
-        ]
-        accession_raw = [
-            v.strip()
-            for m in (entry.get("pdbx_initial_refinement_model") or [])
-            for v in [m.get("accession_code")]
-            if v and v.strip()
-        ]
-
-        refine_codes = _pdb_codes(refine_raw)
-        accession_codes = _pdb_codes(accession_raw)
-        if refine_codes and accession_codes and set(refine_codes) != set(accession_codes):
-            logger.warning(
-                f"{pdb_id}: starting model disagreement — "
-                f"_refine.pdbx_starting_model={refine_codes} vs "
-                f"_pdbx_initial_refinement_model.accession_code={accession_codes} "
-                f"(keeping both)"
-            )
-
-        if accession_codes or refine_codes:
-            # Union, accession first (preferred). When they agree this collapses to the
-            # single code; when they disagree both are kept so the conflict is visible
-            # in the CSV, not just the terminal warning.
-            sm_values = list(dict.fromkeys(accession_codes + refine_codes))
-        elif refine_raw:
-            sm_values = list(dict.fromkeys(v.lower() for v in refine_raw))
-        else:
-            sm_values = []
-        starting_model = " | ".join(sm_values) if sm_values else "<missing>"
-
         grow_blocks = entry.get("exptl_crystal_grow") or []
         grow_details = [g["pdbx_details"] for g in grow_blocks if g.get("pdbx_details")]
         experiment_condition = "; ".join(grow_details) if grow_details else "<missing>"
     else:
-        starting_model = "<missing>"
         experiment_condition = "<missing>"
 
     return {
