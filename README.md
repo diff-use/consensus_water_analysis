@@ -24,8 +24,6 @@ Conserved-water analysis from a fixed local set of PDB-REDO mmCIF structures.
 
 Run stages in order. Each script takes the cohort `.txt` as its first argument and writes output under `data/<cohort_stem>/`.
 
-To carve an isomorphous subset out of a cohort and pick an alignment reference, run the interactive `experiments/space_group_reference_survey.py` marimo notebook after Stage 1: it groups metadata by space group, filters by unit-cell similarity, and writes a `<cohort>_iso.txt` (plus a sidecar `.yaml` recording the split). Feed that `.txt` into the later stages as the cohort. This step is optional and lives in `experiments/` (see the note on promotion in that file's header).
-
 ### Stage 1 — Metadata
 
 ```
@@ -43,6 +41,24 @@ uv run scripts/build_metadata.py pdb_ids.txt [-o metadata.csv]
 |--------|-------------|--------|--------|--------|------------|-----------|------------|------------------|------------|--------|--------|-----------|--------------|----------------------|----------------|
 | 6ybf | P 43 21 2 | 79.11 | 79.11 | 38.02 | 90.0 | 90.0 | 90.0 | 237944.07 | 1.13 | 0.14431 | 0.16636 | 90 | CL\|NA | 5% w/v NaCl, 50 mM AcNa pH 4.5 | 1iee |
 | 5f14 | P 43 21 2 | 78.814 | 78.814 | 37.292 | 90.0 | 90.0 | 90.0 | 231644.72 | 1.15 | 0.14053 | 0.16588 | 204 | CL\|NA | 10% (w/v) sodium chloride, 0.1M sodium acetate | 1iee |
+
+### Stage 1.5 — Isomorphous subset + alignment reference (optional)
+
+```
+uv run marimo edit notebooks/optional_find_isomorphous_subset_and_align_ref.py
+```
+
+- Reads: `data/<cohort>/metadata.csv` only (no CIF parsing)
+- Writes (on demand, from the notebook's export cell): `data/<cohort>_iso.txt` + a sidecar `<cohort>_iso.yaml` recording the split criteria (space group, tolerance, reference)
+
+A cohort with mixed crystal forms is a poor input to alignment and clustering: structures in different space groups (or with divergent unit cells) do not share a common water frame. This notebook carves out an isomorphous subset and names an alignment reference. Set the `metadata.csv` input to the cohort's path, then work through the cells:
+
+1. **Space-group survey** — counts structures per space group, so you can see which crystal form dominates.
+2. **Isomorphousness filter** — within the chosen space group (defaults to the most populated), keep structures whose unit cell is within a tolerance of a reference cell. Isomorphousness is `max_cell_diff` — the largest relative % difference across `a, b, c, α, β, γ` (`cw.metadata.max_cell_diff`).
+3. **Reference pick** — the surviving structures sorted by resolution; the top row is the natural alignment reference (best-resolution isomorphous structure).
+4. **Export** — writes the isomorphous subset to `<cohort>_iso.txt` (+ provenance `.yaml`).
+
+Feed the exported `<cohort>_iso.txt` into Stages 2–4 as the cohort, and set `REF_PDB_ID` in `config.py` to the suggested reference.
 
 ### Stage 2 — Filter waters by protein distance
 

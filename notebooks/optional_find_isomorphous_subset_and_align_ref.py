@@ -40,7 +40,19 @@ def _(mo):
     import config
     from cw.metadata import max_cell_diff
 
-    _default = str(Path(config.DATA_DIR) / "carbonicanhydrase_000562" / "metadata.csv")
+    cohort_input = mo.ui.text(
+        value="carbonicanhydrase_000562",
+        placeholder="<cohort>",
+        label="Cohort name (drives the metadata.csv and output paths)",
+        full_width=True,
+    )
+    cohort_input
+    return Path, cohort_input, config, gemmi, max_cell_diff
+
+
+@app.cell
+def _(Path, cohort_input, config, mo):
+    _default = str(Path(config.DATA_DIR) / cohort_input.value.strip() / "metadata.csv")
     csv_input = mo.ui.text(
         value=_default,
         placeholder="/path/to/<cohort>/metadata.csv",
@@ -48,7 +60,7 @@ def _(mo):
         full_width=True,
     )
     csv_input
-    return Path, csv_input, gemmi, max_cell_diff
+    return (csv_input,)
 
 
 @app.cell
@@ -245,7 +257,84 @@ def _(mo, ref_candidates):
 @app.cell
 def _(mo):
     mo.md("""
-    ## 4 — Partition balance (volcano feasibility)
+    ## 4 — Export isomorphous cohort
+
+    Write the isomorphous subset (Section 3) to a cohort `.txt` — one PDB ID per
+    line — to feed the filter / align / cluster scripts, plus a sidecar `.yaml`
+    recording the split criteria (space group, tolerance, reference) so the
+    subset is reproducible. Set the path, then click the button (it only writes
+    on click).
+    """)
+    return
+
+
+@app.cell
+def _(cohort_input, mo, ref_candidates):
+    cohort_out_input = mo.ui.text(
+        value=f"data/{cohort_input.value.strip()}_iso.txt",
+        placeholder="data/<cohort>_iso.txt",
+        label="Cohort .txt output path",
+        full_width=True,
+    )
+    write_button = mo.ui.run_button(label=f"Write {len(ref_candidates)} IDs")
+    mo.vstack([cohort_out_input, write_button])
+    return cohort_out_input, write_button
+
+
+@app.cell
+def _(
+    Path,
+    cohort_out_input,
+    csv_input,
+    in_sg,
+    mo,
+    ref_candidates,
+    ref_mode,
+    sg_dropdown,
+    tol_slider,
+    write_button,
+):
+    from datetime import datetime
+
+    import yaml
+
+    mo.stop(not write_button.value, mo.md("*Click the button above to write the cohort file.*"))
+    mo.stop(ref_candidates.empty, mo.md("*No isomorphous structures to export.*"))
+
+    _out = Path(cohort_out_input.value.strip())
+    _ids = ref_candidates["pdb_id"].astype(str).tolist()
+    _out.parent.mkdir(parents=True, exist_ok=True)
+    _out.write_text("\n".join(_ids) + "\n")
+
+    _iso = in_sg[in_sg["isomorphous"]]
+    _cell_cols = ["cell_a", "cell_b", "cell_c", "cell_alpha", "cell_beta", "cell_gamma"]
+    _meta = {
+        "parent_cohort": Path(csv_input.value.strip()).parent.name,
+        "subset_txt": _out.name,
+        "split_criterion": "same_space_group_and_isomorphous_cell",
+        "space_group": sg_dropdown.value,
+        "reference_cell_mode": ref_mode.value,
+        "tolerance_pct": float(tol_slider.value),
+        "cell_ranges": {c: [float(_iso[c].min()), float(_iso[c].max())] for c in _cell_cols},
+        "suggested_reference_pdb": str(ref_candidates.iloc[0]["pdb_id"]),
+        "n_structures": len(_ids),
+        "generated_by": "notebooks/optional_find_isomorphous_subset_and_align_ref.py",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _yaml_path = _out.with_suffix(".yaml")
+    _yaml_path.write_text(yaml.safe_dump(_meta, sort_keys=False))
+
+    mo.callout(
+        mo.md(f"Wrote **{len(_ids)}** PDB IDs → `{_out}`\n\nProvenance → `{_yaml_path}`"),
+        kind="success",
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## Explore — Partition balance (volcano feasibility)
 
     Type a boolean expression over the metadata columns. **Arm A** = rows that
     match; **Arm B** = everyone else. A volcano comparing water-cluster
@@ -302,83 +391,6 @@ def _(df, mo, query_input):
         f"**Arm A (matches):** {n_a} ({n_a / len(df):.0%}) &nbsp;|&nbsp; "
         f"**Arm B (rest):** {n_b} ({n_b / len(df):.0%})\n\n"
         f"Query: `{_expr}`"
-    )
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## 5 — Export isomorphous cohort
-
-    Write the isomorphous subset (Section 3) to a cohort `.txt` — one PDB ID per
-    line — to feed the filter / align / cluster scripts, plus a sidecar `.yaml`
-    recording the split criteria (space group, tolerance, reference) so the
-    subset is reproducible. Set the path, then click the button (it only writes
-    on click).
-    """)
-    return
-
-
-@app.cell
-def _(mo, ref_candidates):
-    cohort_out_input = mo.ui.text(
-        value="data/carbonicanhydrase_000562_iso.txt",
-        placeholder="data/<cohort>_iso.txt",
-        label="Cohort .txt output path",
-        full_width=True,
-    )
-    write_button = mo.ui.run_button(label=f"Write {len(ref_candidates)} IDs")
-    mo.vstack([cohort_out_input, write_button])
-    return cohort_out_input, write_button
-
-
-@app.cell
-def _(
-    Path,
-    cohort_out_input,
-    csv_input,
-    in_sg,
-    mo,
-    ref_candidates,
-    ref_mode,
-    sg_dropdown,
-    tol_slider,
-    write_button,
-):
-    from datetime import datetime
-
-    import yaml
-
-    mo.stop(not write_button.value, mo.md("*Click the button above to write the cohort file.*"))
-    mo.stop(ref_candidates.empty, mo.md("*No isomorphous structures to export.*"))
-
-    _out = Path(cohort_out_input.value.strip())
-    _ids = ref_candidates["pdb_id"].astype(str).tolist()
-    _out.parent.mkdir(parents=True, exist_ok=True)
-    _out.write_text("\n".join(_ids) + "\n")
-
-    _iso = in_sg[in_sg["isomorphous"]]
-    _cell_cols = ["cell_a", "cell_b", "cell_c", "cell_alpha", "cell_beta", "cell_gamma"]
-    _meta = {
-        "parent_cohort": Path(csv_input.value.strip()).parent.name,
-        "subset_txt": _out.name,
-        "split_criterion": "same_space_group_and_isomorphous_cell",
-        "space_group": sg_dropdown.value,
-        "reference_cell_mode": ref_mode.value,
-        "tolerance_pct": float(tol_slider.value),
-        "cell_ranges": {c: [float(_iso[c].min()), float(_iso[c].max())] for c in _cell_cols},
-        "suggested_reference_pdb": str(ref_candidates.iloc[0]["pdb_id"]),
-        "n_structures": len(_ids),
-        "generated_by": "notebooks/optional_find_isomorphous_subset_and_align_ref.py",
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    _yaml_path = _out.with_suffix(".yaml")
-    _yaml_path.write_text(yaml.safe_dump(_meta, sort_keys=False))
-
-    mo.callout(
-        mo.md(f"Wrote **{len(_ids)}** PDB IDs → `{_out}`\n\nProvenance → `{_yaml_path}`"),
-        kind="success",
     )
     return
 
