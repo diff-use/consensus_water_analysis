@@ -41,7 +41,7 @@ def _(mo):
     from cw.metadata import max_cell_diff
 
     cohort_input = mo.ui.text(
-        value="carbonicanhydrase_000562",
+        value="C000836",
         placeholder="<cohort>",
         label="Cohort name (drives the metadata.csv and output paths)",
         full_width=True,
@@ -127,6 +127,155 @@ def _(sg_counts):
 
 
 @app.cell
+def _(df):
+    df[df["space_group"] == "P 21 21 21"]
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 1b — Subgroup clustermaps (Cα RMSD & unit-cell difference)
+
+    Hierarchically-clustered heatmaps of the **precomputed** pairwise matrix
+    (`pairwise_metrics_<cutoff>.csv` from `scripts/pairwise_water_metrics.py`).
+    Dark diagonal blocks are subgroups; the color strips flag each structure's
+    space group and resolution, so a conformational block that lines up with one
+    space-group color is really a crystal form, while one that cuts across
+    colors is a genuine conformational split.
+
+    - **Cα RMSD** (`rmsd_after`) → conformational / packing subgroups.
+    - **max cell diff** (`max_cell_diff`) → crystal-form subgroups.
+
+    The RMSD matrix is asymmetric (a→b ≠ b→a); it is symmetrized as (M + Mᵀ)/2
+    before clustering. Heavy compute lives in the script — this only reads its CSV.
+    """)
+    return
+
+
+@app.cell
+def _(Path, config, csv_input, mo):
+    _default = str(
+        Path(csv_input.value.strip()).parent
+        / f"pairwise_metrics_{config.CLUSTER_MEMBER_RADIUS}.csv"
+    )
+    pairwise_input = mo.ui.text(
+        value=_default,
+        placeholder="/path/to/<cohort>/pairwise_metrics_<cutoff>.csv",
+        label="pairwise_metrics.csv (from scripts/pairwise_water_metrics.py)",
+        full_width=True,
+    )
+    pairwise_input
+    return (pairwise_input,)
+
+
+@app.cell
+def _(Path, mo, pairwise_input):
+    import numpy as _np
+    import pandas as _pd
+
+    _pw_path = Path(pairwise_input.value.strip())
+    mo.stop(
+        not _pw_path.exists(),
+        mo.md(
+            f"**pairwise_metrics.csv not found:** `{_pw_path}`\n\n"
+            "Generate it first (needs filtered CIFs):\n\n"
+            "```\n"
+            "uv run scripts/filter_waters_by_distance.py data/<cohort>.txt -j 4\n"
+            "uv run scripts/pairwise_water_metrics.py data/<cohort>.txt\n"
+            "```"
+        ),
+    )
+    _pw = _pd.read_csv(_pw_path)
+
+    def _square(col):
+        _m = _pw.pivot(index="structure_ref", columns="structure_mobile", values=col)
+        return _m.reindex(index=_m.index, columns=_m.index)
+
+    _rmsd = _square("rmsd_after")
+    _cell = _square("max_cell_diff")
+    rmsd_sym = (_rmsd + _rmsd.T) / 2.0
+    cell_sym = (_cell + _cell.T) / 2.0
+    mo.md(f"Loaded pairwise matrix for **{len(rmsd_sym)}** structures from `{_pw_path.name}`.")
+    return cell_sym, rmsd_sym
+
+
+@app.cell
+def _(df):
+    import matplotlib.patches as _mpatches
+    import pandas as _pd
+    import seaborn as _sns
+
+    _meta = df.set_index("pdb_id")
+
+    def subgroup_clustermap(matrix, title, cbar_label, cmap="rocket"):
+        _ids = list(matrix.index)
+        _mat = matrix.fillna(matrix.stack().max())
+
+        _sg = _meta["space_group"].astype(str).reindex(_ids).fillna("?")
+        _res = _pd.to_numeric(_meta["resolution"], errors="coerce").reindex(_ids)
+
+        _sg_levels = sorted(_sg.unique())
+        _sg_pal = dict(zip(_sg_levels, _sns.color_palette("tab10", len(_sg_levels))))
+        _sg_colors = _sg.map(_sg_pal)
+
+        _res_cmap = _sns.color_palette("viridis", as_cmap=True)
+        if _res.notna().any():
+            _lo, _hi = _res.min(), _res.max()
+            _span = (_hi - _lo) or 1.0
+            _res_colors = _pd.Series(
+                [_res_cmap((v - _lo) / _span) if v == v else (0.85, 0.85, 0.85) for v in _res],
+                index=_ids,
+            )
+        else:
+            _res_colors = _pd.Series([(0.85, 0.85, 0.85)] * len(_ids), index=_ids)
+
+        _row_colors = _pd.DataFrame(
+            {"space group": _sg_colors, "resolution": _res_colors}, index=_ids
+        )
+
+        _g = _sns.clustermap(
+            _mat,
+            cmap=cmap,
+            row_colors=_row_colors,
+            col_colors=_row_colors,
+            figsize=(11, 11),
+            xticklabels=True,
+            yticklabels=True,
+            cbar_kws={"label": cbar_label},
+        )
+        _g.ax_heatmap.set_xlabel("")
+        _g.ax_heatmap.set_ylabel("")
+        _g.ax_heatmap.tick_params(labelsize=5)
+        _g.fig.suptitle(title, y=1.02, fontsize=13)
+        _handles = [_mpatches.Patch(color=_c, label=_l) for _l, _c in _sg_pal.items()]
+        _g.ax_heatmap.legend(
+            handles=_handles,
+            title="space group",
+            bbox_to_anchor=(1.28, 1.0),
+            loc="upper left",
+            fontsize=7,
+            title_fontsize=8,
+            frameon=False,
+        )
+        return _g.fig
+
+    return (subgroup_clustermap,)
+
+
+@app.cell
+def _(rmsd_sym, subgroup_clustermap):
+    subgroup_clustermap(rmsd_sym, "Cα RMSD (Å) — conformational subgroups", "Cα RMSD (Å)")
+    return
+
+
+@app.cell
+def _(cell_sym, subgroup_clustermap):
+    subgroup_clustermap(cell_sym, "max cell diff (%) — crystal-form subgroups", "max cell diff (%)")
+    return
+
+
+@app.cell
 def _(mo):
     mo.md("""
     ## 2 — Isomorphousness filter
@@ -199,7 +348,8 @@ def _(df, gemmi, max_cell_diff, mo, ref_mode, sg_dropdown, tol_slider):
 @app.cell
 def _(in_sg, plt):
     _fig, _ax = plt.subplots(figsize=(7, 3))
-    _ax.hist(in_sg["max_cell_diff_pct"], bins=40, color="steelblue")
+    # _ax.hist(in_sg["max_cell_diff_pct"], bins=40, color="steelblue")
+    _ax.hist(in_sg["unit_cell_volume"], bins=40, color="steelblue")
     _ax.set_xlabel("max cell diff from reference (%)")
     _ax.set_ylabel("Structures")
     _ax.set_title("Unit-cell deviation within the selected space group")
@@ -392,6 +542,11 @@ def _(df, mo, query_input):
         f"**Arm B (rest):** {n_b} ({n_b / len(df):.0%})\n\n"
         f"Query: `{_expr}`"
     )
+    return
+
+
+@app.cell
+def _():
     return
 
 

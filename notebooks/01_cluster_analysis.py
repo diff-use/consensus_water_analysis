@@ -66,18 +66,26 @@ def _():
 @app.cell
 def _(Path, config, pd):
     COHORT = "hewls_65" #"carbonicanhydrase_000562" #"hewls_65"
+    # Member-radius variant of the clustering CSVs to read. Set to e.g. "0.5" or
+    # "1.0" to load the radius-sweep outputs (clusters_<r>.csv /
+    # cluster_members_<r>.csv written by find_clustering_hyperparameters.py
+    # --radius); None reads the default clusters.csv / cluster_members.csv.
+    MEMBER_RADIUS = None
     DATA = Path(config.DATA_DIR) / COHORT
     SUBSET = Path(config.DATA_DIR) / Path(COHORT + "_iso")
     if not SUBSET.exists():
         SUBSET = DATA
 
-    clusters = pd.read_csv(SUBSET / "clusters.csv")
-    cluster_members = pd.read_csv(SUBSET / "cluster_members.csv")
+    _suffix = f"_{MEMBER_RADIUS}" if MEMBER_RADIUS is not None else ""
+    clusters = pd.read_csv(SUBSET / f"clusters{_suffix}.csv")
+    cluster_members = pd.read_csv(SUBSET / f"cluster_members{_suffix}.csv")
     metadata = pd.read_csv(DATA / "metadata.csv")
+
+    PLOTS_DIR = Path("data") / "plots" / COHORT
 
     print(f"clusters rows:        {len(clusters)}")
     print(f"cluster_members rows: {len(cluster_members)}")
-    return cluster_members, clusters, metadata
+    return PLOTS_DIR, cluster_members, clusters, metadata
 
 
 @app.cell
@@ -89,22 +97,41 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
+def _(PLOTS_DIR, mo):
     include_noise_toggle = mo.ui.checkbox(value=True, label="include noise waters")
     occ_font_size = mo.ui.slider(
         start=6, stop=20, step=1, value=16, label="font size", show_value=True,
     )
-    mo.hstack([include_noise_toggle, occ_font_size], justify="start")
-    return include_noise_toggle, occ_font_size
+    occ_save_path = mo.ui.text(
+        value=str(PLOTS_DIR / "cluster_occupancy.png"),
+        label="save path", full_width=True,
+    )
+    occ_save_dpi = mo.ui.number(start=72, stop=1200, step=1, value=300, label="dpi")
+    occ_save_button = mo.ui.run_button(label="save figure")
+    mo.vstack([
+        mo.hstack([include_noise_toggle, occ_font_size], justify="start"),
+        mo.hstack([occ_save_path, occ_save_dpi, occ_save_button], justify="start"),
+    ])
+    return (
+        include_noise_toggle,
+        occ_font_size,
+        occ_save_button,
+        occ_save_dpi,
+        occ_save_path,
+    )
 
 
 @app.cell
 def _(
+    Path,
     cluster_members,
     clusters,
     include_noise_toggle,
     np,
     occ_font_size,
+    occ_save_button,
+    occ_save_dpi,
+    occ_save_path,
     pd,
     plt,
     sns,
@@ -185,6 +212,12 @@ def _(
         # ], fontsize=_tick_font_size)
 
         plt.tight_layout()
+
+    if occ_save_button.value:
+        _out = Path(occ_save_path.value)
+        _out.parent.mkdir(parents=True, exist_ok=True)
+        _fig.savefig(_out, dpi=int(occ_save_dpi.value), bbox_inches="tight")
+        print(f"saved to {_out}")
 
     _fig
     return (cluster_occupancy_cutoff,)
@@ -348,7 +381,7 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
+def _(PLOTS_DIR, mo):
     plot_style = mo.ui.dropdown(
         options=["scatter", "hexbin"], value="scatter", label="plot style"
     )
@@ -362,8 +395,25 @@ def _(mo):
     font_size = mo.ui.slider(
         start=6, stop=20, step=1, value=14, label="font size", show_value=True,
     )
-    mo.hstack([plot_style, axis_range, point_alpha, font_size], justify="start")
-    return axis_range, font_size, plot_style, point_alpha
+    pr_save_path = mo.ui.text(
+        value=str(PLOTS_DIR / "precision_recall.png"),
+        label="save path", full_width=True,
+    )
+    pr_save_dpi = mo.ui.number(start=72, stop=1200, step=1, value=300, label="dpi")
+    pr_save_button = mo.ui.run_button(label="save figure")
+    mo.vstack([
+        mo.hstack([plot_style, axis_range, point_alpha, font_size], justify="start"),
+        mo.hstack([pr_save_path, pr_save_dpi, pr_save_button], justify="start"),
+    ])
+    return (
+        axis_range,
+        font_size,
+        plot_style,
+        point_alpha,
+        pr_save_button,
+        pr_save_dpi,
+        pr_save_path,
+    )
 
 
 @app.cell
@@ -391,6 +441,7 @@ def _(
 
 @app.cell
 def _(
+    Path,
     axis_range,
     cluster_occupancy_cutoff,
     font_size,
@@ -399,6 +450,9 @@ def _(
     plt,
     point_alpha,
     pr_df,
+    pr_save_button,
+    pr_save_dpi,
+    pr_save_path,
 ):
     _fig, _ax = plot_pr_scatter(
         pr_df,
@@ -411,6 +465,13 @@ def _(
         title=f"cluster occupancy cutoff = {cluster_occupancy_cutoff}",
     )
     plt.tight_layout()
+
+    if pr_save_button.value:
+        _out = Path(pr_save_path.value)
+        _out.parent.mkdir(parents=True, exist_ok=True)
+        _fig.savefig(_out, dpi=int(pr_save_dpi.value), bbox_inches="tight")
+        print(f"saved to {_out}")
+
     _fig
     return
 
@@ -430,11 +491,27 @@ def _(mo):
 
 
 @app.cell
+def _(PLOTS_DIR, mo):
+    pareto_save_path = mo.ui.text(
+        value=str(PLOTS_DIR / "precision_recall_pareto.png"),
+        label="save path", full_width=True,
+    )
+    pareto_save_dpi = mo.ui.number(start=72, stop=1200, step=1, value=300, label="dpi")
+    pareto_save_button = mo.ui.run_button(label="save figure")
+    mo.hstack([pareto_save_path, pareto_save_dpi, pareto_save_button], justify="start")
+    return pareto_save_button, pareto_save_dpi, pareto_save_path
+
+
+@app.cell
 def _(
+    Path,
     axis_range,
     font_size,
     np,
     pareto_front,
+    pareto_save_button,
+    pareto_save_dpi,
+    pareto_save_path,
     pd,
     plot_pr_scatter,
     point_alpha,
@@ -479,6 +556,13 @@ def _(
         f"F1max={_knee['f1']:.2f}, num_water*={int(round(_knee['num_water']))}, "
         f"dist_to_ideal={_dist_to_ideal:.2f}"
     )
+
+    if pareto_save_button.value:
+        _out = Path(pareto_save_path.value)
+        _out.parent.mkdir(parents=True, exist_ok=True)
+        _fig.savefig(_out, dpi=int(pareto_save_dpi.value), bbox_inches="tight")
+        print(f"saved to {_out}")
+
     _fig
     return
 
@@ -539,6 +623,11 @@ def _(
     )
     plt.tight_layout()
     _fig
+    return
+
+
+@app.cell
+def _():
     return
 
 

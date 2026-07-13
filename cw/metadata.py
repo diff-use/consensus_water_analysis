@@ -193,7 +193,9 @@ def metadata_row(cif_path: Path) -> dict:
     _codes, _status, starting_model = resolve_starting_model(entry, pdb_id)
     if entry is not None:
         grow_blocks = entry.get("exptl_crystal_grow") or []
-        grow_details = [g["pdbx_details"] for g in grow_blocks if g.get("pdbx_details")]
+        grow_details = [
+            " ".join(g["pdbx_details"].split()) for g in grow_blocks if g.get("pdbx_details")
+        ]
         experiment_condition = "; ".join(grow_details) if grow_details else "<missing>"
     else:
         experiment_condition = "<missing>"
