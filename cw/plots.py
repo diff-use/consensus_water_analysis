@@ -176,42 +176,102 @@ def shared_range(matrices, center=None):
 
 def draw_heatmap(matrix, ax, *, title="", cbar_label="", cmap="viridis", center=None,
                  annot=True, fmt=".2f", vmin=None, vmax=None, cbar=True,
-                 mask_diagonal=False, xlabel="", ylabel=""):
+                 mask_diagonal=False, mask_upper=False, xlabel="", ylabel="",
+                 title_fontsize=None, label_fontsize=None, tick_fontsize=None,
+                 cbar_fontsize=None, annot_fontsize=None):
     """Draw one annotated, square seaborn heatmap onto `ax`.
 
     mask_diagonal blanks the leading diagonal (self-comparisons) → NaN.
+    mask_upper blanks the strict upper triangle (only for a square matrix) →
+    keep the lower triangle of a symmetric metric (e.g. F1) so each pair shows once.
+
+    The *_fontsize args size distinct text elements independently — title,
+    axis labels, tick labels, this panel's colorbar (label + its ticks), and the
+    in-cell annotation numbers. None keeps the matplotlib default for that element.
     """
-    mask = np.eye(len(matrix), dtype=bool) if mask_diagonal else None
+    mask = None
+    if mask_diagonal or mask_upper:
+        rows, cols = matrix.shape
+        mask = np.zeros((rows, cols), dtype=bool)
+        if mask_diagonal:
+            np.fill_diagonal(mask, True)
+        if mask_upper and rows == cols:
+            mask |= np.triu(np.ones((rows, cols), dtype=bool), k=1)
     sns.heatmap(
         matrix, ax=ax, cmap=cmap, center=center, annot=annot, fmt=fmt,
         vmin=vmin, vmax=vmax, cbar=cbar, mask=mask,
         square=True, linewidths=0.5, linecolor="white",
+        annot_kws={"size": annot_fontsize} if annot_fontsize is not None else None,
         cbar_kws={"label": cbar_label, "shrink": 0.6},
     )
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    ax.set_title(title, **({"fontsize": title_fontsize} if title_fontsize is not None else {}))
+    ax.set_xlabel(xlabel, **({"fontsize": label_fontsize} if label_fontsize is not None else {}))
+    ax.set_ylabel(ylabel, **({"fontsize": label_fontsize} if label_fontsize is not None else {}))
+    if tick_fontsize is not None:
+        ax.tick_params(labelsize=tick_fontsize)
+    if cbar and cbar_fontsize is not None:
+        _cb = ax.collections[0].colorbar
+        if _cb is not None:
+            _cb.set_label(cbar_label, fontsize=cbar_fontsize)
+            _cb.ax.tick_params(labelsize=cbar_fontsize)
 
 
 def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=None,
                 annot=True, fmt=".2f", panel_size=4.0, shared_cbar=False,
-                mask_diagonal=False, xlabel="", ylabel=""):
+                mask_diagonal=False, mask_upper=False, vmin=None, vmax=None,
+                xlabel="", ylabel="",
+                title_fontsize=None, label_fontsize=None, tick_fontsize=None,
+                cbar_fontsize=None, annot_fontsize=None):
     """Render a {label: matrix} dict as a row of heatmap panels.
 
     Two styling modes:
 
     - `specs` given — a {label: {label, cmap, vmin, vmax}} registry drives each
       panel's title/colour map/range individually (per-metric panels). `shared_cbar`
-      is ignored; each panel keeps its own colorbar.
+      is ignored; each panel keeps its own colorbar. A spec may carry a per-panel
+      `mask_upper` (and `mask_diagonal`) flag overriding the make_panels default, so
+      only the symmetric-metric panels are folded to the lower triangle.
     - `specs` None — every panel uses the uniform `cmap`/`center`/`fmt` kwargs.
       `shared_cbar=True` puts them all on one scale (symmetric about `center` when
       given) with a single figure-level colorbar.
 
+    `mask_diagonal` / `mask_upper` each accept a bool (applied to every panel) or a
+    `{label: bool}` dict (per-panel; labels absent from the dict default to False).
+    The dict form lets one shared-colorbar row fold only some panels — e.g. mask the
+    symmetric self/reference matrices but leave the directional cross matrices whole.
+    `mask_upper` blanks the strict upper triangle of a square panel; use it for
+    symmetric metrics so each unordered pair is drawn once.
+
+    `xlabel` / `ylabel` likewise accept a str (every panel) or a `{label: str}` dict
+    (per-panel; missing labels default to ""), so a mixed row can carry different axis
+    meanings — e.g. predictor / ground-truth on the pairwise panels and mtz / starting
+    model on the cross panels.
+
+    `vmin` / `vmax` (non-`specs` mode) override the colour limits: each, when not None,
+    replaces the corresponding auto value (per-panel autoscale, or the `shared_range`
+    bound under `shared_cbar`). Either bound can be set independently — e.g. pin
+    `vmax=1.0` while letting `vmin` follow the data.
+
+    The *_fontsize args size distinct text elements independently — title, axis labels,
+    tick labels, colorbar (label + ticks; the shared bar under `shared_cbar`, else each
+    panel's own), and the in-cell annotation numbers. None keeps the matplotlib default.
+
     Returns the figure.
     """
+    def _flag(flag, label):
+        return flag.get(label, False) if isinstance(flag, dict) else flag
+
+    def _text(value, label):
+        return value.get(label, "") if isinstance(value, dict) else value
+
     n = len(matrices)
     fig, axes = plt.subplots(1, n, figsize=(panel_size * n, panel_size), squeeze=False)
     axs = axes[0]
+
+    _fonts = dict(
+        title_fontsize=title_fontsize, label_fontsize=label_fontsize,
+        tick_fontsize=tick_fontsize, cbar_fontsize=cbar_fontsize, annot_fontsize=annot_fontsize,
+    )
 
     if specs is not None:
         for ax, (key, m) in zip(axs, matrices.items()):
@@ -219,24 +279,115 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
             draw_heatmap(
                 m, ax, title=spec["label"], cbar_label=spec.get("cbar_label", spec["label"]),
                 cmap=spec["cmap"], vmin=spec.get("vmin"), vmax=spec.get("vmax"),
-                annot=annot, fmt=fmt, mask_diagonal=mask_diagonal,
-                xlabel=xlabel, ylabel=ylabel,
+                annot=annot, fmt=fmt,
+                mask_diagonal=spec.get("mask_diagonal", _flag(mask_diagonal, key)),
+                mask_upper=spec.get("mask_upper", _flag(mask_upper, key)),
+                xlabel=_text(xlabel, key), ylabel=_text(ylabel, key),
+                **_fonts,
             )
         fig.tight_layout()
         return fig
 
-    vmin = vmax = None
+    _vmin = _vmax = None
     if shared_cbar:
-        vmin, vmax = shared_range(matrices, center)
+        _vmin, _vmax = shared_range(matrices, center)
+    # explicit overrides win over the auto/shared bounds, each independently
+    if vmin is not None:
+        _vmin = vmin
+    if vmax is not None:
+        _vmax = vmax
     for ax, (label, m) in zip(axs, matrices.items()):
         draw_heatmap(
             m, ax, title=label, cbar_label=cbar_label, cmap=cmap, center=center,
-            annot=annot, fmt=fmt, vmin=vmin, vmax=vmax, cbar=not shared_cbar,
-            mask_diagonal=mask_diagonal, xlabel=xlabel, ylabel=ylabel,
+            annot=annot, fmt=fmt, vmin=_vmin, vmax=_vmax, cbar=not shared_cbar,
+            mask_diagonal=_flag(mask_diagonal, label), mask_upper=_flag(mask_upper, label),
+            xlabel=_text(xlabel, label), ylabel=_text(ylabel, label),
+            **_fonts,
         )
     if shared_cbar:
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
-        fig.colorbar(sm, ax=axs.tolist(), label=cbar_label, shrink=0.6)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=_vmin, vmax=_vmax))
+        # pad/fraction are fractions of the (combined) parent axes width, which grows
+        # with panel count; scale them by n so the gap and thickness stay panel-sized
+        # instead of drifting far right as more panels are added.
+        cb = fig.colorbar(sm, ax=axs.tolist(), label=cbar_label, shrink=0.75,
+                          pad=0.1 / n, fraction=0.08 / n)
+        if cbar_fontsize is not None:
+            cb.set_label(cbar_label, fontsize=cbar_fontsize)
+            cb.ax.tick_params(labelsize=cbar_fontsize)
         return fig
     fig.tight_layout()
+    return fig
+
+
+def make_panel_grid(rows, *, row_specs=None, panel_size=3.6, annot=True, fmt=".2f",
+                    mask_diagonal=False, mask_upper=False, xlabel="", ylabel="",
+                    title_fontsize=None, label_fontsize=None, tick_fontsize=None,
+                    cbar_fontsize=None, annot_fontsize=None):
+    """Render a grid of heatmaps: one **row per key** of `rows`, sharing columns.
+
+    `rows` is an ordered mapping `{row_key: {panel_label: matrix}}`; every row must carry
+    the same `panel_label`s (the columns). Each row gets its **own shared colorbar and
+    colour scale** — rows are typically different metrics with different units/ranges, so
+    they are never pooled onto one scale. Column **titles are drawn on the top row only**;
+    lower rows repeat the columns without titles.
+
+    `row_specs` is `{row_key: {cmap, center, cbar_label, vmin, vmax}}` controlling that
+    row's colour map / label / limits; missing keys fall back to viridis / row_key / the
+    per-row `shared_range`. `vmin`/`vmax` in a spec override that bound for the row (the
+    other stays auto).
+
+    `mask_diagonal` / `mask_upper` (bool or `{panel_label: bool}`), `xlabel` / `ylabel`
+    (str or `{panel_label: str}`), and the `*_fontsize` args behave as in `make_panels`,
+    applied per panel across every row. Returns the figure.
+    """
+    def _flag(flag, label):
+        return flag.get(label, False) if isinstance(flag, dict) else flag
+
+    def _text(value, label):
+        return value.get(label, "") if isinstance(value, dict) else value
+
+    rows = dict(rows)
+    row_specs = row_specs or {}
+    row_keys = list(rows)
+    col_labels = list(next(iter(rows.values()))) if rows else []
+    nrow, ncol = len(row_keys), len(col_labels)
+    # constrained layout auto-reserves room for titles / labels / ticks / colorbars, so
+    # larger fonts push panels apart instead of overlapping them.
+    fig, axes = plt.subplots(
+        nrow, ncol, figsize=(panel_size * ncol, panel_size * nrow),
+        squeeze=False, layout="constrained",
+    )
+    _fonts = dict(title_fontsize=title_fontsize, label_fontsize=label_fontsize,
+                  tick_fontsize=tick_fontsize, annot_fontsize=annot_fontsize)
+
+    for r, row_key in enumerate(row_keys):
+        mats = rows[row_key]
+        spec = row_specs.get(row_key, {})
+        cmap = spec.get("cmap", "viridis")
+        center = spec.get("center")
+        cbar_label = spec.get("cbar_label", row_key)
+        _auto_min, _auto_max = shared_range(mats, center)
+        vmin = _auto_min if spec.get("vmin") is None else spec["vmin"]
+        vmax = _auto_max if spec.get("vmax") is None else spec["vmax"]
+        row_axes = axes[r]
+        for ax, col_label in zip(row_axes, col_labels):
+            draw_heatmap(
+                mats[col_label], ax,
+                title=col_label if r == 0 else "",
+                cbar_label="", cmap=cmap, center=center,
+                annot=annot, fmt=fmt, vmin=vmin, vmax=vmax, cbar=False,
+                mask_diagonal=_flag(mask_diagonal, col_label),
+                mask_upper=_flag(mask_upper, col_label),
+                xlabel=_text(xlabel, col_label), ylabel=_text(ylabel, col_label),
+                **_fonts,
+            )
+        # one shared colorbar per row; constrained layout places it, `aspect` keeps it
+        # thin, and a small `pad` (fraction of the row's width) pulls it in close to the
+        # last panel instead of leaving the default gap.
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        cb = fig.colorbar(sm, ax=row_axes.tolist(), label=cbar_label,
+                          shrink=0.9, aspect=40, pad=0.01)
+        if cbar_fontsize is not None:
+            cb.set_label(cbar_label, fontsize=cbar_fontsize)
+            cb.ax.tick_params(labelsize=cbar_fontsize)
     return fig

@@ -53,7 +53,9 @@ def _(mo):
     0. **Vet the subset — no refinement needed.** Pairwise Cα-RMSD + max cell-diff over
        the *deposited (PDB-REDO)* structures, feeding the *Pairwise alignment* cell below:
 
-       `uv run scripts/pairwise_water_metrics.py <LIST> -o <PHENIX_DIR>/reference_pairwise_metrics.csv --cutoff <CUTOFF>`
+       `uv run scripts/pairwise_water_metrics.py <LIST> -o <PHENIX_DIR>/reference_pairwise_metrics_<CUTOFF>.csv --cutoff <CUTOFF>`
+
+       <br>_(reads a cutoff-suffixed `reference_pairwise_metrics_<CUTOFF>.csv`, falling back to the legacy unsuffixed file for pre-suffix cutoffs.)_
     1. **Refinement matrix** (heavy; Phenix env + deposited `.mtz` on disk):
 
        `PDBID_LIST=<LIST> STRATEGY=default JOBS=4 bash scripts/phenix/re-refine_all.sh`
@@ -87,12 +89,13 @@ def _():
     import seaborn as sns
 
     import config
-    from cw.plots import diagonal_matrix, make_panels, order_by_count, to_matrix
+    from cw.plots import diagonal_matrix, make_panel_grid, make_panels, order_by_count, to_matrix
 
     return (
         Path,
         config,
         diagonal_matrix,
+        make_panel_grid,
         make_panels,
         np,
         order_by_count,
@@ -111,7 +114,7 @@ def _():
     # Agreement-metric registry (shared by section B panels): label / cmap / range.
     METRICS = {
         "precision": {"label": "Precision", "cmap": "viridis", "vmin": 0, "vmax": 1},
-        "recall": {"label": "Recall (coverage)", "cmap": "viridis", "vmin": 0, "vmax": 1},
+        "recall": {"label": "Recall", "cmap": "viridis", "vmin": 0, "vmax": 1},
         "f1": {"label": "F1", "cmap": "viridis", "vmin": 0, "vmax": 1},
         "matched_precision": {"label": "Matched precision", "cmap": "Blues", "vmin": 0, "vmax": 1},
         "matched_recall": {"label": "Matched recall", "cmap": "Greens", "vmin": 0, "vmax": 1},
@@ -122,7 +125,13 @@ def _():
 
     # Scalar re-refinement metric -> the matching original column in metadata.csv.
     METRIC_TO_ORIGINAL = {"n_water": "num_water", "r_free": "r_free", "r_work": "r_work"}
-    return METRICS, METRIC_TO_ORIGINAL, VARIANTS
+
+    # Agreement metrics that are symmetric in the pair (metric(a, b) == metric(b, a)),
+    # so the upper triangle duplicates the lower and may be masked. Precision / recall
+    # (and their matched variants) are directional (precision(a,b) == recall(b,a)), so
+    # both triangles carry distinct information and are never folded.
+    SYMMETRIC_METRICS = {"f1", "chamfer", "rmsd_after", "max_cell_diff"}
+    return METRICS, METRIC_TO_ORIGINAL, SYMMETRIC_METRICS, VARIANTS
 
 
 @app.cell
@@ -145,9 +154,69 @@ def _(config, mo):
         label="metadata.csv (original deposited values + water-count ordering)",
         full_width=True,
     )
-    cutoff_ui = mo.ui.text(value="1.4", label="cutoff (Å, in pairwise-CSV filenames)")
+    cutoff_ui = mo.ui.text(value="1.0", label="cutoff (Å, in pairwise-CSV filenames; e.g. 0.5, 1.0, 1.4)")
     mo.vstack([phenix_dir_ui, meta_stem_ui, metadata_ui, cutoff_ui])
     return cutoff_ui, meta_stem_ui, metadata_ui, phenix_dir_ui
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## Output & display options
+
+    These are shared **export settings** only — output folder, DPI, format. Saving
+    itself is **per cell**: every figure-producing cell below carries its own
+    **💾 Save figure** button, so you export just the figures you want rather than all of
+    them. Clicking a cell's button writes *that* cell's figure(s) to the output folder as
+    `<name>.<format>` at the chosen DPI (filenames encode the panel plus the active
+    baseline / variant); nothing is written until you click.
+
+    Masking the upper triangle is likewise **per section**, not global. Only the
+    sections whose metric is symmetric in the pair — the **reference-agreement** and
+    **self-refinement pairwise** analyses (F1, chamfer, RMSD, cell-diff) — carry a
+    **mask upper triangle** switch; the directional cross-refinement matrices
+    (predictor ≠ ground truth on transpose) never fold and have no switch.
+    """)
+    return
+
+
+@app.cell
+def _(config, mo):
+    save_dir_ui = mo.ui.text(
+        value=f"{config.DATA_DIR}/plots/refinement_water_heatmaps",
+        label="Output folder",
+        full_width=True,
+    )
+    save_dpi_ui = mo.ui.number(value=300, start=50, stop=1200, step=50, label="DPI")
+    save_fmt_ui = mo.ui.dropdown(
+        options=["png", "pdf", "svg"], value="png", label="Format"
+    )
+    mo.vstack([
+        mo.hstack([save_dpi_ui, save_fmt_ui], justify="start"),
+        save_dir_ui,
+    ])
+    return save_dir_ui, save_dpi_ui, save_fmt_ui
+
+
+@app.cell
+def _(Path, save_dir_ui, save_dpi_ui, save_fmt_ui):
+    def save_fig(fig, name, *, save):
+        """Write `fig` to the output folder as `<name>.<format>` at the chosen DPI when
+        `save` is truthy (typically a cell's Save-figure button value), then return `fig`
+        so it can be used inline where a cell renders its figure. No-op (returns fig
+        unchanged) when `save` is falsy."""
+        if not save:
+            return fig
+        _out = Path(save_dir_ui.value)
+        _out.mkdir(parents=True, exist_ok=True)
+        fig.savefig(
+            _out / f"{name}.{save_fmt_ui.value}",
+            dpi=int(save_dpi_ui.value),
+            bbox_inches="tight",
+        )
+        return fig
+
+    return (save_fig,)
 
 
 @app.cell
@@ -204,6 +273,195 @@ def _(Path, meta_stem_ui, metadata_ui, pd, phenix_dir_ui, sort_by_ui):
 @app.cell
 def _(mo):
     mo.md(r"""
+    ## Summary — metrics × five refinement matrices
+
+    A grid that lines up one **row per selected metric** (default **F1**) across the whole
+    pipeline; each row's five panels sit on **one shared colorbar** (its own colour scale,
+    since metrics differ in units/range), and **column titles are drawn on the top row
+    only**. Columns:
+
+    1. **PDB-REDO pairwise** — deposited-vs-deposited (`reference_pairwise_metrics`).
+    2. **Phenix self-ref (stripped)** — `self_refined_pairwise_metrics_stripped`.
+    3. **Phenix self-ref (auto)** — `self_refined_pairwise_metrics_auto`.
+    4. **Cross-refinement (stripped)** — `phenix_pairwise_metrics_selfref_stripped`.
+    5. **Cross-refinement (kept)** — `phenix_pairwise_metrics_selfref_auto`.
+
+    All five share the **same grounding** as the "re-refined" phenix figures below: the
+    cross panels use the **self-ref-grounded** matrix (`…_selfref_…`, ground truth =
+    `a_refined_by_a`), *not* the original-grounded one — so like panels 1–3 their leading
+    diagonal is a self-vs-self comparison (trivially perfect) and is masked on **all
+    five**. Panels 1–3 are reference-vs-reference matrices (axes: predictor × ground
+    truth); only their lower triangle is of interest, so the switch below folds their
+    upper triangle for **any** metric (not just the symmetric ones). Panels 4–5 are the
+    **directional** cross-refinement matrices (axes: mtz used × starting model; predictor ≠
+    ground truth on transpose): never folded. Axes follow the **Sort axes by** selector and
+    the cutoff in **Output & display options**. Self-contained — reads its own CSVs,
+    independent of the variant/baseline selectors below.
+    """)
+    return
+
+
+@app.cell
+def _(METRICS, mo):
+    summary_metric_ui = mo.ui.multiselect(
+        options=list(METRICS), value=["f1"], label="Summary metrics (one row each)"
+    )
+    summary_mask_ui = mo.ui.switch(
+        value=True, label="mask upper tri of reference panels (1–3)"
+    )
+    # Blank = auto (data min / shared_range; note the shared vmax picks up the masked
+    # diagonal's self-comparison = 1.0). Enter a number to override either bound.
+    summary_vmin_ui = mo.ui.text(value="", placeholder="auto", label="vmin")
+    summary_vmax_ui = mo.ui.text(value="", placeholder="auto", label="vmax")
+    # Per-element font sizes; blank = matplotlib default. Each targets a distinct element.
+    summary_title_fs_ui = mo.ui.text(value="", placeholder="auto", label="title font")
+    summary_label_fs_ui = mo.ui.text(value="", placeholder="auto", label="axes font")
+    summary_tick_fs_ui = mo.ui.text(value="", placeholder="auto", label="tick font")
+    summary_cbar_fs_ui = mo.ui.text(value="", placeholder="auto", label="colorbar font")
+    summary_save_ui = mo.ui.run_button(label="💾 Save figure")
+    mo.vstack([
+        mo.hstack([summary_metric_ui, summary_mask_ui, summary_save_ui], justify="start"),
+        mo.hstack([summary_vmin_ui, summary_vmax_ui], justify="start"),
+        mo.hstack(
+            [summary_title_fs_ui, summary_label_fs_ui, summary_tick_fs_ui, summary_cbar_fs_ui],
+            justify="start",
+        ),
+    ])
+    return (
+        summary_cbar_fs_ui,
+        summary_label_fs_ui,
+        summary_mask_ui,
+        summary_metric_ui,
+        summary_save_ui,
+        summary_tick_fs_ui,
+        summary_title_fs_ui,
+        summary_vmax_ui,
+        summary_vmin_ui,
+    )
+
+
+@app.cell
+def _(
+    METRICS,
+    Path,
+    cutoff_ui,
+    make_panel_grid,
+    mo,
+    order_by_count,
+    pd,
+    phenix_dir_ui,
+    save_fig,
+    summary_cbar_fs_ui,
+    summary_label_fs_ui,
+    summary_mask_ui,
+    summary_metric_ui,
+    summary_save_ui,
+    summary_tick_fs_ui,
+    summary_title_fs_ui,
+    summary_vmax_ui,
+    summary_vmin_ui,
+    to_matrix,
+    water_counts,
+):
+    # Self-contained: reads exactly the five CSVs it needs (stripped + auto fixed),
+    # independent of the variant/baseline selectors. Every panel is grounded on the same
+    # ground truth as the "re-refined" phenix figures below: the cross panels use the
+    # SELF-REF-grounded matrix (phenix_pairwise_metrics_selfref_*, ground truth =
+    # a_refined_by_a), NOT the original-grounded one — so like panels 1–3 their diagonal
+    # is a self-vs-self comparison (trivially perfect) and is masked on all five.
+    # `is_reference` marks the reference-vs-reference panels (1–3), whose upper triangle
+    # may fold (for any metric — only the lower triangle is of interest there) and whose
+    # axes are predictor × ground-truth; the directional cross panels (4–5) never fold.
+    # One grid ROW per selected metric (each on its own colour scale); titles top row only.
+    _dir = Path(phenix_dir_ui.value)
+    _co = cutoff_ui.value
+    _metrics = list(summary_metric_ui.value)
+    mo.stop(not _metrics, mo.md("Select at least one summary metric above."))
+
+    _ref_path = _dir / f"reference_pairwise_metrics_{_co}.csv"
+    if not _ref_path.exists():
+        _ref_path = _dir / "reference_pairwise_metrics.csv"
+
+    # (label, path, index_col, columns_col, is_reference)
+    _sources = [
+        ("PDB-REDO", _ref_path, "structure_ref", "structure_mobile", True),
+        ("Phenix (stripped)", _dir / f"self_refined_pairwise_metrics_stripped_{_co}.csv", "structure_ref", "structure_mobile", True),
+        ("Phenix (kept)", _dir / f"self_refined_pairwise_metrics_auto_{_co}.csv", "structure_ref", "structure_mobile", True),
+        ("Cross-refinement (stripped)", _dir / f"phenix_pairwise_metrics_selfref_stripped_{_co}.csv", "reference", "predictor", False),
+        ("Cross-refinement (kept)", _dir / f"phenix_pairwise_metrics_selfref_auto_{_co}.csv", "reference", "predictor", False),
+    ]
+
+    _missing = [_lbl for _lbl, _p, *_ in _sources if not _p.exists()]
+    mo.stop(
+        bool(_missing),
+        mo.md("Summary needs all five CSVs; missing: " + ", ".join(f"`{_m}`" for _m in _missing)),
+    )
+
+    # Read each CSV once; reuse the DataFrame across every metric row.
+    _frames = {_lbl: (pd.read_csv(_p), _idx, _col) for _lbl, _p, _idx, _col, _ref in _sources}
+    _ref_df = _frames[_sources[0][0]][0]
+    _order = order_by_count(sorted(set(_ref_df["structure_ref"]) | set(_ref_df["structure_mobile"])), water_counts)
+
+    # Every panel's diagonal is a self-vs-self comparison (trivially perfect) → mask all.
+    # Fold the upper triangle of the reference panels (1–3) whenever the switch is on —
+    # only the lower triangle is of interest there, regardless of metric symmetry; the
+    # directional cross panels (4–5) never fold. Axes: reference = predictor × ground
+    # truth; cross = mtz used × starting model. These are per-column, shared by all rows.
+    _fold = summary_mask_ui.value
+    _mask_upper = {_lbl: (_fold and _ref) for _lbl, _p, _idx, _col, _ref in _sources}
+    _xlabel = {_lbl: ("predictor" if _ref else "mtz used") for _lbl, _p, _idx, _col, _ref in _sources}
+    _ylabel = {_lbl: ("ground truth" if _ref else "starting model") for _lbl, _p, _idx, _col, _ref in _sources}
+
+    # Blank input → None (auto); a parseable number overrides that bound.
+    def _limit(_t):
+        try:
+            return float(_t) if str(_t).strip() != "" else None
+        except ValueError:
+            return None
+
+    _ov_min, _ov_max = _limit(summary_vmin_ui.value), _limit(summary_vmax_ui.value)
+
+    # One row of five matrices per metric, plus that row's colour spec. vmin/vmax overrides
+    # apply to every row — leave blank when mixing metrics of different units/ranges.
+    _rows = {}
+    _row_specs = {}
+    for _m in _metrics:
+        _row = {}
+        for _lbl, (_df, _idx, _col) in _frames.items():
+            mo.stop(_m not in _df.columns, mo.md(f"`{_m}` not a column in the summary CSVs."))
+            _row[_lbl] = to_matrix(_df, _m, _order, index=_idx, columns=_col)
+        _rows[_m] = _row
+        _s = METRICS.get(_m, {})
+        _row_specs[_m] = {
+            "cmap": _s.get("cmap", "viridis"),
+            "center": _s.get("center"),
+            "cbar_label": _s.get("label", _m),
+            "vmin": _ov_min,
+            "vmax": _ov_max,
+        }
+
+    _fig = make_panel_grid(
+        _rows,
+        row_specs=_row_specs,
+        mask_diagonal=True,
+        mask_upper=_mask_upper,
+        panel_size=3.6,
+        fmt=".2f",
+        xlabel=_xlabel,
+        ylabel=_ylabel,
+        title_fontsize=_limit(summary_title_fs_ui.value),
+        label_fontsize=_limit(summary_label_fs_ui.value),
+        tick_fontsize=_limit(summary_tick_fs_ui.value),
+        cbar_fontsize=_limit(summary_cbar_fs_ui.value),
+    )
+    save_fig(_fig, f"summary_grid_{'-'.join(_metrics)}", save=summary_save_ui.value)
+    _fig
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
     ## Pairwise alignment of the subsampled originals — RMSD + cell difference
 
     _Needs: `reference_pairwise_metrics.csv` (step 0 — no refinement)._
@@ -222,13 +480,15 @@ def _(mo):
 @app.cell
 def _(mo):
     pw_mask_diag_ui = mo.ui.switch(value=True, label="mask diagonal (self-comparisons) → NaN")
-    pw_mask_diag_ui
-    return (pw_mask_diag_ui,)
+    pw_save_ui = mo.ui.run_button(label="💾 Save figure")
+    mo.hstack([pw_mask_diag_ui, pw_save_ui], justify="start")
+    return pw_mask_diag_ui, pw_save_ui
 
 
 @app.cell
 def _(
     Path,
+    cutoff_ui,
     mo,
     np,
     order_by_count,
@@ -236,14 +496,18 @@ def _(
     phenix_dir_ui,
     plt,
     pw_mask_diag_ui,
+    pw_save_ui,
+    save_fig,
     sns,
     to_matrix,
     water_counts,
 ):
-    _path = Path(phenix_dir_ui.value) / "reference_pairwise_metrics.csv"
+    _path = Path(phenix_dir_ui.value) / f"reference_pairwise_metrics_{cutoff_ui.value}.csv"
+    if not _path.exists():
+        _path = Path(phenix_dir_ui.value) / "reference_pairwise_metrics.csv"
     mo.stop(
         not _path.exists(),
-        mo.md(f"`reference_pairwise_metrics.csv` not found in `{phenix_dir_ui.value}`."),
+        mo.md(f"`reference_pairwise_metrics_{cutoff_ui.value}.csv` not found in `{phenix_dir_ui.value}`."),
     )
     _ref = pd.read_csv(_path)
     _order = order_by_count(
@@ -275,7 +539,7 @@ def _(
     _ax.set_xlabel("")
     _ax.set_ylabel("")
     _fig.tight_layout()
-    _fig
+    save_fig(_fig, "pairwise_alignment_rmsd_cell", save=pw_save_ui.value)
     return
 
 
@@ -423,8 +687,9 @@ def _(mo):
     sa_diag_mode_ui = mo.ui.radio(
         options=["delta", "original"], value="delta", label="phenix cells", inline=True
     )
-    mo.hstack([sa_diag_orient_ui, sa_diag_mode_ui], justify="start")
-    return sa_diag_mode_ui, sa_diag_orient_ui
+    sa_diag_save_ui = mo.ui.run_button(label="💾 Save figure")
+    mo.hstack([sa_diag_orient_ui, sa_diag_mode_ui, sa_diag_save_ui], justify="start")
+    return sa_diag_mode_ui, sa_diag_orient_ui, sa_diag_save_ui
 
 
 @app.cell
@@ -440,8 +705,10 @@ def _(
     sa_df,
     sa_diag_mode_ui,
     sa_diag_orient_ui,
+    sa_diag_save_ui,
     sa_metric_ui,
     sa_order,
+    save_fig,
     variant_ui,
 ):
     _metric = sa_metric_ui.value
@@ -494,7 +761,11 @@ def _(
             _lim = float(np.nanmax(np.abs(_delta.to_numpy()))) or 1.0
             _specs[_key] = {"label": _key, "cbar_label": f"Δ{_metric}", "cmap": "RdBu_r", "vmin": -_lim, "vmax": _lim}
         _fig = make_panels(_panels, specs=_specs, fmt=_fmt, xlabel="", ylabel="")
-    _fig
+    save_fig(
+        _fig,
+        f"sectionA_selfref_diagonal_{_metric}_{sa_diag_mode_ui.value}_{sa_diag_orient_ui.value}",
+        save=sa_diag_save_ui.value,
+    )
     return
 
 
@@ -511,16 +782,36 @@ def _(mo):
 
 
 @app.cell
-def _(make_panels, sa_df, sa_metric_ui, sa_order, to_matrix, variant_ui):
+def _(mo):
+    sa_cross_save_ui = mo.ui.run_button(label="💾 Save figure")
+    sa_cross_save_ui
+    return (sa_cross_save_ui,)
+
+
+@app.cell
+def _(
+    make_panels,
+    sa_cross_save_ui,
+    sa_df,
+    sa_metric_ui,
+    sa_order,
+    save_fig,
+    to_matrix,
+    variant_ui,
+):
     _metric = sa_metric_ui.value
     _fmt = ".0f" if _metric == "n_water" else ".3f"
     _panels = {
         v: to_matrix(sa_df[sa_df["variant"] == v], _metric, sa_order, index="starting_model", columns="mtz_source")
         for v in variant_ui.value
     }
-    make_panels(
-        _panels, cbar_label=_metric, cmap="viridis", shared_cbar=True, fmt=_fmt,
-        xlabel="mtz data used", ylabel="starting model",
+    save_fig(
+        make_panels(
+            _panels, cbar_label=_metric, cmap="viridis", shared_cbar=True, fmt=_fmt,
+            xlabel="mtz data used", ylabel="starting model",
+        ),
+        f"sectionA_cross_matrix_{_metric}",
+        save=sa_cross_save_ui.value,
     )
     return
 
@@ -543,6 +834,13 @@ def _(mo):
 
 
 @app.cell
+def _(mo):
+    sa_delta_save_ui = mo.ui.run_button(label="💾 Save figure")
+    sa_delta_save_ui
+    return (sa_delta_save_ui,)
+
+
+@app.cell
 def _(
     METRIC_TO_ORIGINAL,
     Path,
@@ -551,9 +849,11 @@ def _(
     metadata_ui,
     mo,
     pd,
+    sa_delta_save_ui,
     sa_df,
     sa_metric_ui,
     sa_order,
+    save_fig,
     to_matrix,
     variant_ui,
 ):
@@ -589,12 +889,16 @@ def _(
         )
         for v in variant_ui.value
     }
-    make_panels(
-        _panels,
-        cbar_label=f"Δ{_metric} (cross − {baseline_ui.value})",
-        cmap="RdBu_r", center=0, shared_cbar=True, fmt=_fmt,
-        mask_diagonal=baseline_ui.value == "re-refined",
-        xlabel="mtz data used", ylabel="starting model",
+    save_fig(
+        make_panels(
+            _panels,
+            cbar_label=f"Δ{_metric} (cross − {baseline_ui.value})",
+            cmap="RdBu_r", center=0, shared_cbar=True, fmt=_fmt,
+            mask_diagonal=baseline_ui.value == "re-refined",
+            xlabel="mtz data used", ylabel="starting model",
+        ),
+        f"sectionA_delta_{_metric}_baseline-{baseline_ui.value}",
+        save=sa_delta_save_ui.value,
     )
     return
 
@@ -625,7 +929,11 @@ def _(Path, cutoff_ui, pd, phenix_dir_ui, variant_ui):
     _dir = Path(phenix_dir_ui.value)
     _co = cutoff_ui.value
 
-    _ref_path = _dir / "reference_pairwise_metrics.csv"
+    # Cutoff-suffixed reference (reference_pairwise_metrics_<cutoff>.csv), falling back
+    # to the legacy unsuffixed file for cutoffs generated before the suffix convention.
+    _ref_path = _dir / f"reference_pairwise_metrics_{_co}.csv"
+    if not _ref_path.exists():
+        _ref_path = _dir / "reference_pairwise_metrics.csv"
     sb_ref_orig = pd.read_csv(_ref_path) if _ref_path.exists() else None
 
     sb_phenix = {}
@@ -683,15 +991,29 @@ def _(mo):
 
 
 @app.cell
+def _(mo):
+    # Symmetric-metric section: masking the upper triangle is meaningful here (F1 etc.
+    # are symmetric in the pair), so this section carries its own switch.
+    sb_ref_mask_ui = mo.ui.switch(value=False, label="mask upper triangle (symmetric metrics)")
+    sb_ref_save_ui = mo.ui.run_button(label="💾 Save figure")
+    mo.hstack([sb_ref_mask_ui, sb_ref_save_ui], justify="start")
+    return sb_ref_mask_ui, sb_ref_save_ui
+
+
+@app.cell
 def _(
     METRICS,
+    SYMMETRIC_METRICS,
     baseline_ui,
     make_panels,
     mo,
     np,
+    save_fig,
     sb_metric_ui,
     sb_order,
+    sb_ref_mask_ui,
     sb_ref_orig,
+    sb_ref_save_ui,
     sb_selfref,
     to_matrix,
 ):
@@ -705,21 +1027,29 @@ def _(
     # *vertically* (one range per metric column, across original + all variant blocks)
     # instead of the fixed 0–1 in METRICS. ★-mark the one the Δ panels subtract.
     _orig_active = baseline_ui.value == "original"
-    _named = []  # (star, title, matrices)
+    _named = []  # (star, title, matrices, slug)
     if sb_ref_orig is not None:
-        _named.append(("★ " if _orig_active else "", "original reference — original-vs-original", _ref_mats(sb_ref_orig)))
+        _named.append(("★ " if _orig_active else "", "original reference — original-vs-original", _ref_mats(sb_ref_orig), "original"))
     for _v in sb_selfref:
-        _named.append(("" if _orig_active else "★ ", f"re-refined reference — `{_v}`", _ref_mats(sb_selfref[_v])))
+        _named.append(("" if _orig_active else "★ ", f"re-refined reference — `{_v}`", _ref_mats(sb_selfref[_v]), f"selfref_{_v}"))
 
-    # Per-metric shared (vmin, vmax) across all blocks, from the actual data range.
+    # Per-metric shared (vmin, vmax) across all blocks, from the actual data range;
+    # fold symmetric metrics to the lower triangle when the mask-upper switch is on.
     _specs = {}
     for _k in sb_metric_ui.value:
-        _vals = np.concatenate([mats[_k].to_numpy().ravel() for _, _, mats in _named]) if _named else np.array([])
+        _vals = np.concatenate([mats[_k].to_numpy().ravel() for _, _, mats, _ in _named]) if _named else np.array([])
         _vals = _vals[np.isfinite(_vals)]
-        _specs[_k] = {**METRICS[_k], "vmin": float(_vals.min()), "vmax": float(_vals.max())} if _vals.size else METRICS[_k]
+        _spec = {**METRICS[_k], "mask_upper": sb_ref_mask_ui.value and _k in SYMMETRIC_METRICS}
+        if _vals.size:
+            _spec["vmin"], _spec["vmax"] = float(_vals.min()), float(_vals.max())
+        _specs[_k] = _spec
 
-    def _ref_panels(mats):
-        return make_panels(mats, specs=_specs, mask_diagonal=True, xlabel="predictor (mobile)", ylabel="ground truth (ref)")
+    def _ref_panels(mats, slug):
+        return save_fig(
+            make_panels(mats, specs=_specs, mask_diagonal=True, xlabel="predictor (mobile)", ylabel="ground truth (ref)"),
+            f"sectionB_reference_{slug}",
+            save=sb_ref_save_ui.value,
+        )
 
     _blocks = [mo.md(
         f"**Active Δ baseline: `{baseline_ui.value}`** — the ★-marked reference below is the "
@@ -727,14 +1057,14 @@ def _(
     )]
 
     if sb_ref_orig is not None:
-        _star, _title, _mats = _named[0]
-        _blocks.append(mo.vstack([mo.md(f"**{_star}{_title}**"), _ref_panels(_mats)]))
+        _star, _title, _mats, _slug = _named[0]
+        _blocks.append(mo.vstack([mo.md(f"**{_star}{_title}**"), _ref_panels(_mats, _slug)]))
     else:
         _blocks.append(mo.md("_`reference_pairwise_metrics.csv` not found — original reference unavailable._"))
 
     if sb_selfref:
-        for _star, _title, _mats in (_named[1:] if sb_ref_orig is not None else _named):
-            _blocks.append(mo.vstack([mo.md(f"**{_star}{_title}**"), _ref_panels(_mats)]))
+        for _star, _title, _mats, _slug in (_named[1:] if sb_ref_orig is not None else _named):
+            _blocks.append(mo.vstack([mo.md(f"**{_star}{_title}**"), _ref_panels(_mats, _slug)]))
     else:
         _blocks.append(mo.md("_No `self_refined_pairwise_metrics_*` CSVs — re-refined reference unavailable (run `--self-refined`)._"))
 
@@ -759,7 +1089,14 @@ def _(mo):
 
 
 @app.cell
-def _(mo, np, plt, sb_ref_orig, water_counts):
+def _(mo):
+    sb_scatter_save_ui = mo.ui.run_button(label="💾 Save figure")
+    sb_scatter_save_ui
+    return (sb_scatter_save_ui,)
+
+
+@app.cell
+def _(mo, np, plt, save_fig, sb_ref_orig, sb_scatter_save_ui, water_counts):
     mo.stop(sb_ref_orig is None, mo.md("_`reference_pairwise_metrics.csv` not found — nothing to plot._"))
     mo.stop("precision" not in sb_ref_orig.columns, mo.md("_No `precision` column in the reference metrics._"))
 
@@ -791,7 +1128,7 @@ def _(mo, np, plt, sb_ref_orig, water_counts):
     _ax.set_title("Reference-agreement precision vs Δ water count")
     _ax.legend(loc="best", fontsize=8, frameon=False)
     _fig.tight_layout()
-    _fig
+    save_fig(_fig, "sectionB_precision_vs_delta_water", save=sb_scatter_save_ui.value)
     return
 
 
@@ -812,14 +1149,23 @@ def _(mo):
 
 
 @app.cell
+def _(mo):
+    sb_selfdiag_save_ui = mo.ui.run_button(label="💾 Save figure")
+    sb_selfdiag_save_ui
+    return (sb_selfdiag_save_ui,)
+
+
+@app.cell
 def _(
     METRICS,
     diagonal_matrix,
     make_panels,
     mo,
+    save_fig,
     sb_metric_ui,
     sb_order,
     sb_phenix,
+    sb_selfdiag_save_ui,
     variant_ui,
 ):
     mo.stop(not sb_phenix, mo.md("No original-grounded phenix CSVs (`phenix_pairwise_metrics_<variant>`)."))
@@ -834,7 +1180,11 @@ def _(
         _panels = {k: diagonal_matrix(_self[k], sb_order) for k in sb_metric_ui.value}
         _rows.append(mo.vstack([
             mo.md(f"**`{_v}` — self-re-refinement vs PDB-REDO (diagonal)**"),
-            make_panels(_panels, specs=METRICS, xlabel="", ylabel="self-re-refinement vs PDB-REDO"),
+            save_fig(
+                make_panels(_panels, specs=METRICS, xlabel="", ylabel="self-re-refinement vs PDB-REDO"),
+                f"sectionB_selfref_diagonal_{_v}",
+                save=sb_selfdiag_save_ui.value,
+            ),
         ]))
     mo.vstack(_rows)
     return
@@ -861,13 +1211,28 @@ def _(mo):
 
 
 @app.cell
+def _(mo):
+    # Symmetric-metric section (self-refined ref − original ref is symmetric for F1 etc.),
+    # so it carries its own mask-upper switch — distinct from the directional
+    # cross-refinement matrices below, which never fold.
+    sb_selfpair_mask_ui = mo.ui.switch(value=False, label="mask upper triangle (symmetric metrics)")
+    sb_selfpair_save_ui = mo.ui.run_button(label="💾 Save figure")
+    mo.hstack([sb_selfpair_mask_ui, sb_selfpair_save_ui], justify="start")
+    return sb_selfpair_mask_ui, sb_selfpair_save_ui
+
+
+@app.cell
 def _(
+    SYMMETRIC_METRICS,
     make_panels,
     mo,
     np,
+    save_fig,
     sb_metric_ui,
     sb_order,
     sb_ref_orig,
+    sb_selfpair_mask_ui,
+    sb_selfpair_save_ui,
     sb_selfref,
     to_matrix,
     variant_ui,
@@ -902,12 +1267,19 @@ def _(
             if np.isfinite(d[_k].to_numpy()).any()
         ]
         _lim = (max(_lims) if _lims else 1.0) or 1.0
-        _specs[_k] = {"label": f"Δ {_k}", "cmap": "coolwarm", "vmin": -_lim, "vmax": _lim}
+        _specs[_k] = {
+            "label": f"Δ {_k}", "cmap": "coolwarm", "vmin": -_lim, "vmax": _lim,
+            "mask_upper": sb_selfpair_mask_ui.value and _k in SYMMETRIC_METRICS,
+        }
 
     mo.vstack([
         mo.vstack([
             mo.md(f"**Δ `{_v}`  (self-refined ref − original ref, pairwise)**"),
-            make_panels(_diffs, specs=_specs, fmt="+.2f", mask_diagonal=True, xlabel="structure b", ylabel="structure a"),
+            save_fig(
+                make_panels(_diffs, specs=_specs, fmt="+.2f", mask_diagonal=True, xlabel="structure b", ylabel="structure a"),
+                f"sectionB_delta_selfref_pairwise_{_v}",
+                save=sb_selfpair_save_ui.value,
+            ),
         ])
         for _v, _diffs in _per_variant
     ])
@@ -928,15 +1300,24 @@ def _(mo):
 
 
 @app.cell
+def _(mo):
+    sb_phxcross_save_ui = mo.ui.run_button(label="💾 Save figure")
+    sb_phxcross_save_ui
+    return (sb_phxcross_save_ui,)
+
+
+@app.cell
 def _(
     METRICS,
     baseline_ui,
     make_panels,
     mo,
+    save_fig,
     sb_metric_ui,
     sb_order,
     sb_phenix,
     sb_phenix_selfref,
+    sb_phxcross_save_ui,
     to_matrix,
     variant_ui,
 ):
@@ -950,10 +1331,14 @@ def _(
     mo.vstack([
         mo.vstack([
             mo.md(f"**phenix cross-refinement — `{v}`  (ground truth = `{_ground}`)**"),
-            make_panels(
-                {k: to_matrix(_src[v], k, sb_order, index="reference", columns="predictor") for k in sb_metric_ui.value},
-                specs=METRICS, mask_diagonal=baseline_ui.value == "re-refined",
-                xlabel="mtz used to re-refine with starting model", ylabel="starting model",
+            save_fig(
+                make_panels(
+                    {k: to_matrix(_src[v], k, sb_order, index="reference", columns="predictor") for k in sb_metric_ui.value},
+                    specs=METRICS, mask_diagonal=baseline_ui.value == "re-refined",
+                    xlabel="mtz used to re-refine with starting model", ylabel="starting model",
+                ),
+                f"sectionB_phenix_cross_{v}_baseline-{baseline_ui.value}",
+                save=sb_phxcross_save_ui.value,
             ),
         ])
         for v in variant_ui.value if v in _src
@@ -990,11 +1375,13 @@ def _(mo, sb_metric_ui):
         })
         for _k in sb_metric_ui.value
     })
+    sb_phxraw_save_ui = mo.ui.run_button(label="💾 Save figure")
     mo.vstack([
         mo.md("**Manual shared range** — blank = auto from the data range across all blocks."),
         raw_range_ui,
+        sb_phxraw_save_ui,
     ])
-    return (raw_range_ui,)
+    return raw_range_ui, sb_phxraw_save_ui
 
 
 @app.cell
@@ -1005,10 +1392,12 @@ def _(
     mo,
     np,
     raw_range_ui,
+    save_fig,
     sb_metric_ui,
     sb_order,
     sb_phenix,
     sb_phenix_selfref,
+    sb_phxraw_save_ui,
     to_matrix,
     variant_ui,
 ):
@@ -1049,9 +1438,13 @@ def _(
     mo.vstack([
         mo.vstack([
             mo.md(f"**phenix — `{_v}`  (ground truth = `{_ground}`)**"),
-            make_panels(
-                _mats, specs=_specs, mask_diagonal=not _orig,
-                xlabel="mtz used to re-refine", ylabel="starting model",
+            save_fig(
+                make_panels(
+                    _mats, specs=_specs, mask_diagonal=not _orig,
+                    xlabel="mtz used to re-refine", ylabel="starting model",
+                ),
+                f"sectionB_phenix_raw_{_v}_baseline-{baseline_ui.value}",
+                save=sb_phxraw_save_ui.value,
             ),
         ])
         for _v, _mats in _mats_by_variant
@@ -1108,11 +1501,13 @@ def _(baseline_ui, mo, sb_ref_orig, sb_selfref, variant_ui):
         _v: mo.ui.dropdown(options=_opts, value=_default(_v), label=f"`{_v}` panel −")
         for _v in variant_ui.value
     })
+    sb_phxdelta_save_ui = mo.ui.run_button(label="💾 Save figure")
     mo.vstack([
         mo.md("**Per-panel Δ baseline** — the reference each phenix panel subtracts."),
         delta_baseline_ui,
+        sb_phxdelta_save_ui,
     ])
-    return (delta_baseline_ui,)
+    return delta_baseline_ui, sb_phxdelta_save_ui
 
 
 @app.cell
@@ -1122,10 +1517,12 @@ def _(
     make_panels,
     mo,
     np,
+    save_fig,
     sb_metric_ui,
     sb_order,
     sb_phenix,
     sb_phenix_selfref,
+    sb_phxdelta_save_ui,
     sb_ref_orig,
     sb_selfref,
     to_matrix,
@@ -1200,7 +1597,11 @@ def _(
             continue
         _rows.append(mo.vstack([
             mo.md(f"**Δ `{_v}`  (phenix − `{_lbl}`)**"),
-            make_panels(_diffs, specs=_specs, fmt="+.2f", mask_diagonal=_mask, xlabel="mtz used to re-refine", ylabel="starting model"),
+            save_fig(
+                make_panels(_diffs, specs=_specs, fmt="+.2f", mask_diagonal=_mask, xlabel="mtz used to re-refine", ylabel="starting model"),
+                f"sectionB_delta_phenix_{_v}_baseline-{baseline_ui.value}",
+                save=sb_phxdelta_save_ui.value,
+            ),
         ]))
     mo.vstack(_rows)
     return
