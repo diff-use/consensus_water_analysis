@@ -41,7 +41,7 @@ def _(mo):
     from cw.metadata import max_cell_diff
 
     cohort_input = mo.ui.text(
-        value="C000836",
+        value="C001033",
         placeholder="<cohort>",
         label="Cohort name (drives the metadata.csv and output paths)",
         full_width=True,
@@ -278,6 +278,138 @@ def _(cell_sym, subgroup_clustermap):
 @app.cell
 def _(mo):
     mo.md("""
+    ## 1c — Below-threshold clusters
+
+    Pick a metric (Cα RMSD or unit-cell difference) and a threshold, then cut the
+    same pairwise matrix with **complete linkage** so every pair *inside* a
+    cluster is ≤ threshold (not just the group mean). This cell reports **how many
+    clusters** satisfy the threshold and **how many of those have more than 10
+    members**, then gives a per-cluster summary — size, min / median / max of
+    **both** metrics, resolution range, space groups, and PDB IDs — for each of
+    those larger clusters.
+    """)
+    return
+
+
+@app.cell
+def _(cell_sym, mo, rmsd_sym):
+    import numpy as _np
+
+    def _pos_range(_m):
+        _v = _m.to_numpy(dtype=float)
+        _v = _v[~_np.isnan(_v)]
+        _v = _v[_v > 0]
+        return (_v.min(), _np.median(_v), _v.max()) if len(_v) else (0.0, 0.0, 1.0)
+
+    _r = _pos_range(rmsd_sym)
+    _c = _pos_range(cell_sym)
+
+    threshold_metric = mo.ui.dropdown(
+        options={"Cα RMSD (Å)": "rmsd", "max cell diff (%)": "cell"},
+        value="Cα RMSD (Å)",
+        label="Cluster on",
+    )
+    threshold_value = mo.ui.number(
+        start=0.0,
+        stop=float(max(_r[2], _c[2])),
+        step=0.05,
+        value=round(float(_r[1]), 2),
+        label="Threshold (max pairwise value within a cluster)",
+    )
+    mo.vstack([
+        threshold_metric,
+        threshold_value,
+        mo.md(
+            "Observed off-diagonal ranges (min / median / max):\n\n"
+            f"- Cα RMSD (Å): {_r[0]:.3f} / {_r[1]:.3f} / {_r[2]:.3f}\n"
+            f"- max cell diff (%): {_c[0]:.2f} / {_c[1]:.2f} / {_c[2]:.2f}"
+        ),
+    ])
+    return threshold_metric, threshold_value
+
+
+@app.cell
+def _(cell_sym, df, mo, rmsd_sym, threshold_metric, threshold_value):
+    import numpy as _np
+    import pandas as _pd
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from scipy.spatial.distance import squareform
+
+    _min_members = 10  # only clusters with strictly more than this get a summary
+
+    _matrix = rmsd_sym if threshold_metric.value == "rmsd" else cell_sym
+    _thr = float(threshold_value.value)
+    _ids = list(_matrix.index)
+
+    _d = _matrix.to_numpy(dtype=float).copy()
+    _d[_np.isnan(_d)] = _np.nanmax(_d)  # failed alignments → maximally far apart
+    _d = (_d + _d.T) / 2.0
+    _np.fill_diagonal(_d, 0.0)
+
+    # Complete linkage: a cluster formed below height t has ALL its pairwise
+    # distances ≤ t, so every cluster from a distance-cut at the threshold
+    # satisfies the criterion by construction (singletons trivially).
+    _labels = fcluster(linkage(squareform(_d, checks=False), method="complete"), t=_thr, criterion="distance")
+    _vals, _counts = _np.unique(_labels, return_counts=True)
+
+    _order = _np.argsort(_counts)[::-1]
+    _big = [(_vals[i], int(_counts[i])) for i in _order if _counts[i] > _min_members]
+
+    _meta = df.set_index("pdb_id")
+    _metric_label = "Cα RMSD (Å)" if threshold_metric.value == "rmsd" else "max cell diff (%)"
+
+    def _offdiag(_m, _members):
+        _sub = _m.loc[_members, _members].to_numpy(dtype=float)
+        _v = _sub[_np.triu_indices(len(_members), k=1)]
+        return _v[~_np.isnan(_v)]
+
+    def _stat(_v, _fmt):
+        if len(_v) == 0:
+            return "n/a"
+        return f"min {_v.min():{_fmt}} / median {_np.median(_v):{_fmt}} / max {_v.max():{_fmt}}"
+
+    def _summary(_rank, _members):
+        _res = _pd.to_numeric(_meta["resolution"], errors="coerce").reindex(_members)
+        _sg = _meta["space_group"].astype(str).reindex(_members)
+        _res_line = (
+            "n/a"
+            if _res.notna().sum() == 0
+            else f"min {_res.min():.2f} / median {_res.median():.2f} / max {_res.max():.2f}"
+        )
+        _sg_line = ", ".join(f"{_k} ×{_v}" for _k, _v in _sg.value_counts().items())
+        return (
+            f"#### Cluster {_rank} — {len(_members)} structures\n\n"
+            "| metric | min / median / max |\n"
+            "|---|---|\n"
+            f"| Cα RMSD (Å) | {_stat(_offdiag(rmsd_sym, _members), '.3f')} |\n"
+            f"| max cell diff (%) | {_stat(_offdiag(cell_sym, _members), '.2f')} |\n"
+            f"| resolution (Å) | {_res_line} |\n\n"
+            f"**Space groups:** {_sg_line}\n\n"
+            f"**PDB IDs:** `{'`, `'.join(_members)}`\n"
+        )
+
+    _blocks = []
+    for _rank, (_lab, _n) in enumerate(_big, 1):
+        _members = [_ids[i] for i in range(len(_ids)) if _labels[i] == _lab]
+        _blocks.append(_summary(_rank, _members))
+
+    _header = (
+        f"### Below-threshold clusters — {_metric_label} ≤ {_thr:g}\n\n"
+        f"**{len(_vals)} clusters** satisfy the threshold (every pair within a cluster "
+        f"≤ {_thr:g}; includes singletons), of which **{len(_big)}** have more than "
+        f"{_min_members} members."
+    )
+    if not _big:
+        _header += f"\n\n*No cluster has more than {_min_members} members at this threshold.*"
+
+    _body = _header + "\n\n---\n\n" + "\n\n---\n\n".join(_blocks) if _blocks else _header
+    mo.md(_body)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
     ## 2 — Isomorphousness filter
 
     Pick the space group to work in (defaults to the most populated), a
@@ -346,10 +478,18 @@ def _(df, gemmi, max_cell_diff, mo, ref_mode, sg_dropdown, tol_slider):
 
 
 @app.cell
+def _():
+    set_a = set("3o5p, 3o5q, 3o5r, 4drm, 4dro, 4drq, 4jfj, 4jfk, 4jfl, 4jfm, 4tx0, 4w9q, 5bxj, 5obk, 6tx4, 6tx5, 6tx6, 6tx7, 6tx8, 6tx9, 7apq, 7apt, 7apw, 7etv, 8chp, 8chq, 8r5k, 9ey3, 9ey4".split(", "))
+    set_b = set("3o5p, 3o5r, 4drm, 4dro, 4drq, 4jfj, 4jfk, 4jfm, 4tx0, 4w9q, 5obk, 6tx4, 6tx5, 6tx6, 6tx7, 6tx8, 6tx9, 7apq, 7apt, 7apw, 7ett, 7etu, 7etv, 8chp, 8chq, 8r5k, 9ey3, 9ey4".split(", "))
+    len(set_a.intersection(set_b))
+    return
+
+
+@app.cell
 def _(in_sg, plt):
     _fig, _ax = plt.subplots(figsize=(7, 3))
-    # _ax.hist(in_sg["max_cell_diff_pct"], bins=40, color="steelblue")
-    _ax.hist(in_sg["unit_cell_volume"], bins=40, color="steelblue")
+    _ax.hist(in_sg["max_cell_diff_pct"], bins=40, color="steelblue")
+    # _ax.hist(in_sg["unit_cell_volume"], bins=40, color="steelblue")
     _ax.set_xlabel("max cell diff from reference (%)")
     _ax.set_ylabel("Structures")
     _ax.set_title("Unit-cell deviation within the selected space group")

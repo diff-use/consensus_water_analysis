@@ -70,7 +70,7 @@ def _(Path, config, pd):
     # "1.0" to load the radius-sweep outputs (clusters_<r>.csv /
     # cluster_members_<r>.csv written by find_clustering_hyperparameters.py
     # --radius); None reads the default clusters.csv / cluster_members.csv.
-    MEMBER_RADIUS = None
+    MEMBER_RADIUS = 0.5 #None
     DATA = Path(config.DATA_DIR) / COHORT
     SUBSET = Path(config.DATA_DIR) / Path(COHORT + "_iso")
     if not SUBSET.exists():
@@ -81,11 +81,15 @@ def _(Path, config, pd):
     cluster_members = pd.read_csv(SUBSET / f"cluster_members{_suffix}.csv")
     metadata = pd.read_csv(DATA / "metadata.csv")
 
+    # Radius used downstream to match waters to consensus centers — follows the
+    # loaded variant so the analysis is self-consistent; falls back to config.
+    match_radius = float(MEMBER_RADIUS) if MEMBER_RADIUS is not None else config.CLUSTER_MEMBER_RADIUS
+
     PLOTS_DIR = Path("data") / "plots" / COHORT
 
     print(f"clusters rows:        {len(clusters)}")
     print(f"cluster_members rows: {len(cluster_members)}")
-    return PLOTS_DIR, cluster_members, clusters, metadata
+    return PLOTS_DIR, cluster_members, clusters, match_radius, metadata
 
 
 @app.cell
@@ -421,8 +425,8 @@ def _(
     cluster_members,
     cluster_occupancy_cutoff,
     clusters,
-    config,
     consensus_centers,
+    match_radius,
     metadata,
     pd,
     per_structure_consensus_pr,
@@ -432,7 +436,7 @@ def _(
     pr_df = per_structure_consensus_pr(
         cluster_members,
         consensus_centers(clusters, cluster_occupancy_cutoff),
-        config.CLUSTER_MEMBER_RADIUS,
+        match_radius,
     ).merge(metadata[["pdb_id", "num_water"]], on="pdb_id", how="left")
     pr_df["num_water"] = pd.to_numeric(pr_df["num_water"], errors="coerce")
     pr_df = pr_df.dropna(subset=["num_water"])
@@ -591,8 +595,8 @@ def _(
     cluster_members,
     cluster_occupancy_cutoff,
     clusters,
-    config,
     consensus_centers,
+    match_radius,
     per_structure_consensus_chamfer,
     per_structure_consensus_pr,
     plt,
@@ -604,7 +608,7 @@ def _(
     if score_metric.value == "F1":
         _col, _label = "f1", "F1"
         _scores = per_structure_consensus_pr(
-            cluster_members, _centers, config.CLUSTER_MEMBER_RADIUS
+            cluster_members, _centers, match_radius
         )
         _best = _scores.loc[_scores[_col].idxmax()]
     else:
