@@ -124,13 +124,18 @@ def per_structure_consensus_pr(
 
     For every pdb_id, treats the consensus cluster centers as the reference set
     and that structure's waters as the prediction, then applies precision_recall.
-    Returns one row per structure: pdb_id, precision, recall, f1.
+    Returns one row per structure: pdb_id, precision, recall, f1, num_water.
+
+    num_water is that structure's pooled water count — the size of its prediction
+    set — taken straight from cluster_members, so it reflects the waters actually
+    clustered for this cohort (e.g. after an EDIA/B-factor filter) rather than any
+    external metadata total, and needs no metadata.csv.
     """
     rows = []
     for pdb_id, group in cluster_members.groupby("pdb_id"):
         water_coords = group[["x", "y", "z"]].to_numpy()
         pr = precision_recall(center_coords, water_coords, dist_cutoff)
-        rows.append({"pdb_id": pdb_id, **pr})
+        rows.append({"pdb_id": pdb_id, **pr, "num_water": len(group)})
     return pd.DataFrame(rows)
 
 

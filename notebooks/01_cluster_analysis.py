@@ -16,7 +16,7 @@ def _(mo):
     mo.md("""
     # 01 — Cluster analysis
 
-    Reads pre-computed `clusters.csv`, `cluster_members.csv`, and `metadata.csv`
+    Reads pre-computed `clusters.csv` and `cluster_members.csv`
     for one cohort, then explores cluster occupancy, water metrics, and
     per-structure agreement with the consensus. Re-run
     `scripts/cluster_waters.py` to refresh the CSVs. HDBSCAN parameter
@@ -70,16 +70,16 @@ def _(Path, config, pd):
     # "1.0" to load the radius-sweep outputs (clusters_<r>.csv /
     # cluster_members_<r>.csv written by find_clustering_hyperparameters.py
     # --radius); None reads the default clusters.csv / cluster_members.csv.
-    MEMBER_RADIUS = 0.5 #None
+    MEMBER_RADIUS = None
     DATA = Path(config.DATA_DIR) / COHORT
-    SUBSET = Path(config.DATA_DIR) / Path(COHORT + "_iso")
+    subset_suffix = "_iso" #"_bfactor_z2.0water" #"_iso"
+    SUBSET = Path(config.DATA_DIR) / (COHORT + subset_suffix) #/ "min_cluster_size_5_min_samples_5"
     if not SUBSET.exists():
         SUBSET = DATA
 
     _suffix = f"_{MEMBER_RADIUS}" if MEMBER_RADIUS is not None else ""
     clusters = pd.read_csv(SUBSET / f"clusters{_suffix}.csv")
     cluster_members = pd.read_csv(SUBSET / f"cluster_members{_suffix}.csv")
-    metadata = pd.read_csv(DATA / "metadata.csv")
 
     # Radius used downstream to match waters to consensus centers — follows the
     # loaded variant so the analysis is self-consistent; falls back to config.
@@ -89,7 +89,9 @@ def _(Path, config, pd):
 
     print(f"clusters rows:        {len(clusters)}")
     print(f"cluster_members rows: {len(cluster_members)}")
-    return PLOTS_DIR, cluster_members, clusters, match_radius, metadata
+    print(f"match radius:         {match_radius}")
+    print(f"SUBSET: {SUBSET}")
+    return PLOTS_DIR, cluster_members, clusters, match_radius
 
 
 @app.cell
@@ -142,7 +144,7 @@ def _(
 ):
     cluster_occupancy_cutoff = 0.3
     _fs = occ_font_size.value
-    _tick_font_size = 14  # tick labels are fixed, independent of the slider
+    _tick_font_size = 16  # tick labels are fixed, independent of the slider
 
     if len(clusters) == 0:
         _fig, _ax = plt.subplots(figsize=(4, 3))
@@ -230,40 +232,169 @@ def _(
 @app.cell
 def _(mo):
     mo.md("""
-    ### Cumulative water members vs cluster occupancy
+    ### Clusters vs cumulative waters by occupancy
+
+    The bars are the raw count per occupancy bin: *clusters* (gray) plus *noise*
+    waters (brown, a single pile at occupancy `1 / n_structures`). The right
+    axis is **broken** — the top panel zooms the noise pile, the bottom panel
+    the cluster-count detail — because noise dwarfs the per-bin cluster counts.
+    The long tail of tiny low-occupancy clusters dominates, which is what makes
+    non-consensus look prevalent. The maroon line (left axis) is member-weighted:
+    cumulative fraction of all *waters* at occupancy ≤ x (noise included). It
+    climbs slowly at low occupancy, showing those many small clusters actually
+    hold only a minority of waters.
     """)
     return
 
 
 @app.cell
-def _(cluster_members, cluster_occupancy_cutoff, clusters, plt):
-    if len(clusters) == 0:
-        _fig, _ax = plt.subplots(figsize=(5, 3))
-        _ax.text(0.5, 0.5, "No clusters", transform=_ax.transAxes, ha="center")
-    else:
-        _member_counts = (
-            cluster_members[cluster_members["within_cutoff"]]
-            .groupby("cluster_id")
-            .size()
-            .rename("n_members")
-        )
-        _cum = (
-            clusters[["cluster_id", "cluster_occupancy"]]
-            .merge(_member_counts, on="cluster_id")
-            .sort_values("cluster_occupancy")
-        )
-        _cum["cum_members"] = _cum["n_members"].cumsum()
+def _(PLOTS_DIR, mo):
+    water_occ_font_size = mo.ui.slider(
+        start=6, stop=20, step=1, value=14, label="font size", show_value=True,
+    )
+    water_occ_save_path = mo.ui.text(
+        value=str(PLOTS_DIR / "cluster_occupancy_water_weighted.png"),
+        label="save path", full_width=True,
+    )
+    water_occ_save_dpi = mo.ui.number(start=72, stop=1200, step=1, value=300, label="dpi")
+    water_occ_save_button = mo.ui.run_button(label="save figure")
+    mo.vstack([
+        mo.hstack([water_occ_font_size], justify="start"),
+        mo.hstack([water_occ_save_path, water_occ_save_dpi, water_occ_save_button], justify="start"),
+    ])
+    return (
+        water_occ_font_size,
+        water_occ_save_button,
+        water_occ_save_dpi,
+        water_occ_save_path,
+    )
 
-        _fig, _ax = plt.subplots(figsize=(5, 3))
-        _ax.step(_cum["cluster_occupancy"], _cum["cum_members"], where="post")
-        _ax.axvline(
-            cluster_occupancy_cutoff, color="red", linestyle="--", linewidth=1,
-            label=f"cutoff = {cluster_occupancy_cutoff}",
-        )
-        _ax.set_xlabel("cluster occupancy (fraction of structures)")
-        _ax.set_ylabel("cumulative water members")
-        _ax.legend()
+
+@app.cell
+def _(
+    Path,
+    cluster_members,
+    cluster_occupancy_cutoff,
+    clusters,
+    np,
+    plt,
+    water_occ_font_size,
+    water_occ_save_button,
+    water_occ_save_dpi,
+    water_occ_save_path,
+):
+    _fs = water_occ_font_size.value
+    _tick_font_size = 14
+
+    if len(clusters) == 0:
+        _fig, _ax = plt.subplots(figsize=(4, 3))
+        _ax.text(0.5, 0.5, "No clusters", transform=_ax.transAxes, ha="center", fontsize=_fs)
         plt.tight_layout()
+    else:
+        _members = (
+            cluster_members[cluster_members["within_cutoff"]]
+            .groupby("cluster_id").size().rename("n_members")
+        )
+        _occ = clusters[["cluster_id", "cluster_occupancy"]].merge(_members, on="cluster_id")
+
+        _n_structures = cluster_members["pdb_id"].nunique()
+        _noise_occ = 1.0 / _n_structures if _n_structures else 0.0
+        _noise_n = int((cluster_members["cluster_id"] == -1).sum())
+
+        _edges = np.linspace(0, 1, 21)
+        _width = 0.9 * (_edges[1] - _edges[0])
+        _centers = (_edges[:-1] + _edges[1:]) / 2
+        # left axis: raw number of clusters per occupancy bin
+        _cluster_hist, _ = np.histogram(clusters["cluster_occupancy"], bins=_edges)
+
+        # right axis: cumulative fraction of waters (member-weighted, incl. noise)
+        _water_per_bin, _ = np.histogram(_occ["cluster_occupancy"], bins=_edges, weights=_occ["n_members"])
+        _noise_per_bin, _ = np.histogram([_noise_occ], bins=_edges, weights=[_noise_n])
+        _water_counts = _water_per_bin + _noise_per_bin
+
+        _total = _water_counts.sum()
+        _cum_frac = _water_counts.cumsum() / _total
+        # noise sits below the cutoff, so the cumulative fraction at the cutoff is
+        # exactly the complement of the consensus (>= cutoff) water fraction.
+        _frac = _occ.loc[_occ["cluster_occupancy"] >= cluster_occupancy_cutoff, "n_members"].sum() / _total
+        _cum_at_cutoff = 1 - _frac
+
+        _cluster_max = int(_cluster_hist.max())
+        _noise_bin = int(_noise_per_bin.argmax())
+        _noise_top = int(_cluster_hist[_noise_bin] + _noise_n)
+
+        # Broken #clusters axis (right): a small top panel zooms the noise pile,
+        # the larger bottom panel shows the cluster-count detail. A full-height
+        # overlay carries the cumulative water line (left) so its 100% ceiling
+        # lines up with the top of the noise pile.
+        _fig, (_ax_top, _ax_bot) = plt.subplots(
+            2, 1, sharex=True, figsize=(4, 3),
+            gridspec_kw={"height_ratios": [1, 3], "hspace": 0.05},
+        )
+        _fig.subplots_adjust(left=0.17, right=0.83, bottom=0.2, top=0.95)
+
+        for _bax in (_ax_top, _ax_bot):
+            _bax.bar(_centers, _cluster_hist, width=_width, color="gray", alpha=0.5)
+            _bax.bar(_centers, _noise_per_bin, width=_width, bottom=_cluster_hist,
+                     color="lightgrey", alpha=0.7)
+            # _bax.yaxis.tick_right()
+            # _bax.yaxis.set_label_position("right")
+            _bax.tick_params(axis="y", colors="gray", labelsize=_tick_font_size)
+
+        # top panel ends exactly at the noise-pile top so the curve's 100% meets it
+        _ax_top.set_ylim(_noise_top * 0.85, _noise_top)
+        _ax_bot.set_ylim(0, _cluster_max * 1.25)
+        _ax_bot.set_ylabel("#clusters", fontsize=_fs, color="gray")
+        _ax_bot.set_xlabel("cluster occupancy", fontsize=_fs)
+        _ax_bot.tick_params(axis="x", labelsize=_tick_font_size)
+
+        # diagonal break marks between the two panels
+        _ax_top.spines["bottom"].set_visible(False)
+        _ax_bot.spines["top"].set_visible(False)
+        _ax_top.tick_params(bottom=False)
+        _d = 0.015
+        _kw = dict(color="k", clip_on=False, linewidth=1, transform=_ax_top.transAxes)
+        _ax_top.plot((-_d, +_d), (-_d, +_d), **_kw)
+        _ax_top.plot((1 - _d, 1 + _d), (-_d, +_d), **_kw)
+        _kw["transform"] = _ax_bot.transAxes
+        _ax_bot.plot((-_d, +_d), (1 - _d, 1 + _d), **_kw)
+        _ax_bot.plot((1 - _d, 1 + _d), (1 - _d, 1 + _d), **_kw)
+
+        # full-height overlay for the cumulative water fraction, foregrounded on
+        # the left; spans both panels so 100% sits at the noise-pile ceiling
+        _cum_curve_color = "k"
+        _pt = _ax_top.get_position()
+        _pb = _ax_bot.get_position()
+        _ax_cum = _fig.add_axes([_pb.x0, _pb.y0, _pb.width, _pt.y1 - _pb.y0])
+        _ax_cum.set_xlim(_ax_bot.get_xlim())
+        _ax_cum.set_ylim(0, _cum_frac.max())
+        _ax_cum.plot(_centers, _cum_frac, color=_cum_curve_color, lw=2.5, label="waters")
+        # _ax_cum.fill_between(_centers, _cum_frac, color=_cum_curve_color, alpha=0.15)
+        # exploration: cumulative fraction of clusters (unweighted, excludes noise)
+        # _cum_clusters = _cluster_hist.cumsum() / _cluster_hist.sum()
+        # _ax_cum.plot(_centers, _cum_clusters, color="grey", lw=1.5, label="clusters")
+        # _ax_cum.legend(loc="upper left", fontsize=_tick_font_size, frameon=False)
+        _ax_cum.set_ylabel("cumulative water%", fontsize=_fs, color="k")
+        _ax_cum.tick_params(axis="y", colors="k", labelsize=_tick_font_size)
+        _ax_cum.axvline(cluster_occupancy_cutoff, color="C0", linestyle="--", linewidth=1)
+        _ax_cum.axhline(_cum_at_cutoff, color="k", linestyle="--", linewidth=1)
+        _ax_cum.patch.set_visible(False)
+        _ax_cum.xaxis.set_visible(False)
+        _ax_cum.yaxis.tick_right()
+        _ax_cum.yaxis.set_label_position("right")
+        for _s in ("top", "right", "bottom"):
+            _ax_cum.spines[_s].set_visible(False)
+
+        print(
+            f"{_frac:.2%} of all waters at occupancy >= {cluster_occupancy_cutoff}; "
+            f"cumulative fraction below cutoff = {_cum_at_cutoff:.2%}"
+        )
+
+    if water_occ_save_button.value:
+        _out = Path(water_occ_save_path.value)
+        _out.parent.mkdir(parents=True, exist_ok=True)
+        _fig.savefig(_out, dpi=int(water_occ_save_dpi.value), bbox_inches="tight")
+        print(f"saved to {_out}")
 
     _fig
     return
@@ -341,14 +472,14 @@ def _(mo):
 
 @app.cell
 def _(cluster_members, mo):
-    _candidates = ["b_factor", "edia", "muse_score", "occupancy"]
+    _candidates = ["b_factor", "edia", "muse_score", "occupancy", "b_factor_zscore"]
     _available = [
         c for c in _candidates
         if c in cluster_members.columns and cluster_members[c].notna().any()
     ]
     pairplot_metrics = mo.ui.multiselect(
         options=_available,
-        value=[m for m in ["b_factor", "edia", "muse_score"] if m in _available],
+        value=[m for m in ["b_factor_zscore", "edia"] if m in _available],
         label="median metrics for pairplot (vs cluster_occupancy)",
     )
     pairplot_metrics
@@ -427,19 +558,18 @@ def _(
     clusters,
     consensus_centers,
     match_radius,
-    metadata,
-    pd,
     per_structure_consensus_pr,
 ):
     # Per-structure precision/recall/f1 vs the consensus centers, plus num_water.
+    # num_water comes straight from cluster_members (each structure's pooled water
+    # count = its prediction-set size), so it matches the waters actually clustered
+    # for this cohort — not a deposited metadata total — and needs no metadata.csv.
     # Shared by the scatter and the Pareto-front cells below.
     pr_df = per_structure_consensus_pr(
         cluster_members,
         consensus_centers(clusters, cluster_occupancy_cutoff),
         match_radius,
-    ).merge(metadata[["pdb_id", "num_water"]], on="pdb_id", how="left")
-    pr_df["num_water"] = pd.to_numeric(pr_df["num_water"], errors="coerce")
-    pr_df = pr_df.dropna(subset=["num_water"])
+    )
     return (pr_df,)
 
 
@@ -540,7 +670,7 @@ def _(
     )
 
     _fig, _ax = plot_pr_scatter(
-        pr_df, color="num_water", n_color_bins=10,
+        pr_df, color="num_water", color_label="#water", n_color_bins=10,
         alpha=point_alpha.value, lim=tuple(axis_range.value),
         fontsize=font_size.value, marker_size=30
         # title=f"cluster occupancy cutoff = {cluster_occupancy_cutoff}",
