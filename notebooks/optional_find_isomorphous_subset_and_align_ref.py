@@ -14,19 +14,17 @@ def _():
 @app.cell
 def _(mo):
     mo.md("""
-    # Space-group survey + alignment-reference pick
+    # Isomorphous-subset finder + alignment-reference pick
 
-    For one cohort's `metadata.csv`:
+    **Part 1 — minimal path** (reads `metadata.csv` only): survey the space
+    groups, filter to an isomorphous subset within one space group, pick the
+    best-resolution reference, and export the subset as a cohort `.txt`.
 
-    1. **How many space groups** are present, and how many structures sit in each.
-    2. **Isomorphousness filter** (optional) — within the dominant space group,
-       keep only structures whose unit cell is within a tolerance of the
-       reference cell (`cw.metadata.max_cell_diff`, the largest relative %
-       difference across `a, b, c, alpha, beta, gamma`).
-    3. **Reference pick** — the surviving structures sorted by resolution, so the
-       best-resolution isomorphous structure is the natural alignment reference.
-
-    Reads the precomputed `metadata.csv` only — no CIF parsing here.
+    **Part 2 — optional deep dive** (also reads `pairwise_metrics_<cutoff>.csv`
+    from `scripts/pairwise_water_metrics.py`): clustermaps, below-threshold
+    clusters, and cross-metric (conformation vs crystal-form) agreement — the
+    evidence for *which* space group and tolerance to pick in Part 1. Run it only
+    if you want to dig deeper before committing to a subset.
     """)
     return
 
@@ -71,10 +69,12 @@ def _(Path, csv_input, mo):
     mo.stop(not _csv.exists(), mo.md(f"**metadata.csv not found:** `{_csv}`"))
 
     df = pd.read_csv(_csv)
-    # resolution / r_work / r_free are "<missing>" when gemmi couldn't read them;
-    # coerce to NaN so numeric queries (e.g. `r_free <= 0.25`) don't hit strings.
-    for _col in ("resolution", "r_work", "r_free"):
-        df[_col] = pd.to_numeric(df[_col], errors="coerce")
+    # resolution / (deposited) r_work / r_free are "<missing>" when the value was
+    # unavailable; coerce to NaN so numeric queries (e.g. `r_free <= 0.25`) don't
+    # hit strings. deposited_* are absent from older metadata.csv, hence the guard.
+    for _col in ("resolution", "r_work", "r_free", "deposited_r_work", "deposited_r_free"):
+        if _col in df.columns:
+            df[_col] = pd.to_numeric(df[_col], errors="coerce")
     mo.md(f"Loaded **{len(df)}** structures from `{_csv.name}`.")
     return (df,)
 
@@ -127,15 +127,308 @@ def _(sg_counts):
 
 
 @app.cell
-def _(df):
-    df[df["space_group"] == "P 21 21 21"]
+def _(mo):
+    mo.md("""
+    ## 2 — Isomorphousness filter
+
+    Pick the space group to work in (defaults to the most populated), a
+    reference cell, and a tolerance. A structure is *isomorphous* if
+    `max_cell_diff(cell, reference_cell)` is at or below the tolerance.
+
+    **Reference cell** options:
+    - *highest resolution* — anchor on the structure you'd most likely align to.
+    - *median cell* — anchor on the cohort's central cell (robust to outliers).
+    """)
+    return
+
+
+@app.cell
+def _(mo, sg_counts):
+    sg_dropdown = mo.ui.dropdown(
+        options=sg_counts.index.astype(str).tolist(),
+        value=str(sg_counts.index[0]),
+        label="Space group",
+    )
+    ref_mode = mo.ui.dropdown(
+        options=["median cell", "highest resolution"],
+        value="median cell",
+        label="Reference cell",
+    )
+    tol_slider = mo.ui.slider(
+        start=0.0, stop=10.0, step=0.25, value=2.0, label="Tolerance (max cell diff %)",
+        show_value=True,
+    )
+    mo.vstack([sg_dropdown, ref_mode, tol_slider])
+    return ref_mode, sg_dropdown, tol_slider
+
+
+@app.cell
+def _(df, gemmi, max_cell_diff, mo, ref_mode, sg_dropdown, tol_slider):
+    _cols = ["cell_a", "cell_b", "cell_c", "cell_alpha", "cell_beta", "cell_gamma"]
+
+    in_sg = df[df["space_group"].astype(str) == sg_dropdown.value].copy()
+    mo.stop(in_sg.empty, mo.md("No structures in that space group."))
+
+    def _cell(row):
+        return gemmi.UnitCell(*(float(row[c]) for c in _cols))
+
+    if ref_mode.value == "highest resolution":
+        _ref_row = in_sg.sort_values("resolution").iloc[0]
+        ref_cell = _cell(_ref_row)
+        ref_label = f"{_ref_row['pdb_id']} (res {_ref_row['resolution']:.2f} Å)"
+    else:
+        _med = in_sg[_cols].median()
+        ref_cell = gemmi.UnitCell(*(float(_med[c]) for c in _cols))
+        ref_label = "median cell"
+
+    in_sg["max_cell_diff_pct"] = in_sg.apply(
+        lambda r: max_cell_diff(_cell(r), ref_cell), axis=1
+    )
+    in_sg["isomorphous"] = in_sg["max_cell_diff_pct"] <= tol_slider.value
+
+    _n_iso = int(in_sg["isomorphous"].sum())
+    mo.md(
+        f"Space group **{sg_dropdown.value}**: {len(in_sg)} structures.\n\n"
+        f"Reference cell: **{ref_label}** — `{ref_cell}`\n\n"
+        f"Within **{tol_slider.value}%** tolerance: "
+        f"**{_n_iso} isomorphous** / {len(in_sg) - _n_iso} excluded."
+    )
+    return (in_sg,)
+
+
+@app.cell
+def _(in_sg, plt):
+    _fig, _ax = plt.subplots(figsize=(7, 3))
+    _ax.hist(in_sg["max_cell_diff_pct"], bins=40, color="steelblue")
+    _ax.set_xlabel("max cell diff from reference (%)")
+    _ax.set_ylabel("Structures")
+    _ax.set_title("Unit-cell deviation within the selected space group")
+    _fig.tight_layout()
+    _fig
     return
 
 
 @app.cell
 def _(mo):
     mo.md("""
-    ## 1b — Subgroup clustermaps (Cα RMSD & unit-cell difference)
+    ## 2b — Additional column filters (optional)
+
+    Narrow the isomorphous subset further with a boolean expression over the
+    metadata columns — combine conditions with `and` / `or` / `not` and
+    parentheses, e.g. `resolution <= 2.0 and deposited_r_free <= 0.2`.
+
+    Uses `pandas.DataFrame.query` syntax. Rows with a `NaN` in a referenced
+    column (missing resolution / R-free) never match, so they are dropped.
+    Leave blank to keep the full isomorphous subset.
+    """)
+    return
+
+
+@app.cell
+def _(in_sg, mo):
+    _iso = in_sg[in_sg["isomorphous"]]
+    _numeric = [
+        c
+        for c in (
+            "resolution",
+            "r_work",
+            "r_free",
+            "deposited_r_work",
+            "deposited_r_free",
+            "num_water",
+            "unit_cell_volume",
+        )
+        if c in _iso.columns and _iso[c].notna().any()
+    ]
+    _ranges = "\n".join(f"- `{c}`: {_iso[c].min():.3g} – {_iso[c].max():.3g}" for c in _numeric)
+    extra_query_input = mo.ui.text(
+        value="",
+        placeholder="resolution <= 2.0 and deposited_r_free <= 0.2",
+        label="Additional filter (blank = keep all isomorphous)",
+        full_width=True,
+    )
+    mo.vstack([
+        extra_query_input,
+        mo.md(
+            f"**Columns:** `{'`, `'.join(in_sg.columns)}`\n\n"
+            f"**Numeric ranges (isomorphous subset):**\n{_ranges}"
+        ),
+    ])
+    return (extra_query_input,)
+
+
+@app.cell
+def _(df, extra_query_input, in_sg, mo):
+    _n_iso = int(in_sg["isomorphous"].sum())  # Z: all isomorphous, criteria aside
+    iso_filtered = in_sg[in_sg["isomorphous"]].copy()
+    _expr = extra_query_input.value.strip()
+    if _expr:
+        try:
+            _matched = df.query(_expr)  # X: whole cohort matching criteria
+            iso_filtered = iso_filtered.query(_expr)  # Y: isomorphous AND match
+        except Exception as _exc:
+            mo.stop(True, mo.md(f"**Invalid query:** `{type(_exc).__name__}: {_exc}`"))
+        _msg = (
+            f"**{len(_matched)}** match the filtering criteria `{_expr}`, "
+            f"among which **{len(iso_filtered)} / {_n_iso}** are isomorphous."
+        )
+    else:
+        _msg = f"Isomorphous subset: **{_n_iso}** structures (no additional filter)."
+    mo.md(_msg)
+    return (iso_filtered,)
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 3 — Alignment-reference candidates
+
+    The filtered isomorphous subset sorted by resolution. The top row is the
+    best-resolution structure — the natural alignment reference.
+    """)
+    return
+
+
+@app.cell
+def _(iso_filtered):
+    _show = [
+        c
+        for c in (
+            "pdb_id",
+            "resolution",
+            "r_free",
+            "deposited_r_free",
+            "max_cell_diff_pct",
+            "num_water",
+            "unit_cell_volume",
+        )
+        if c in iso_filtered.columns
+    ]
+    ref_candidates = iso_filtered.sort_values("resolution")[_show].reset_index(drop=True)
+    ref_candidates
+    return (ref_candidates,)
+
+
+@app.cell
+def _(mo, ref_candidates):
+    mo.stop(ref_candidates.empty, mo.md("*No isomorphous structures at this tolerance.*"))
+    _top = ref_candidates.iloc[0]
+    mo.callout(
+        mo.md(
+            f"**Suggested reference: `{_top['pdb_id']}`** — "
+            f"resolution {_top['resolution']:.2f} Å, "
+            f"{int(_top['num_water'])} waters, "
+            f"cell diff {_top['max_cell_diff_pct']:.2f}% from reference."
+        ),
+        kind="success",
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 4 — Export isomorphous cohort
+
+    Write the isomorphous subset (Section 3) to a cohort `.txt` — one PDB ID per
+    line — to feed the filter / align / cluster scripts, plus a sidecar `.yaml`
+    recording the split criteria (space group, tolerance, reference) so the
+    subset is reproducible. Set the path, then click the button (it only writes
+    on click).
+    """)
+    return
+
+
+@app.cell
+def _(cohort_input, mo, ref_candidates):
+    cohort_out_input = mo.ui.text(
+        value=f"data/{cohort_input.value.strip()}_iso.txt",
+        placeholder="data/<cohort>_iso.txt",
+        label="Cohort .txt output path",
+        full_width=True,
+    )
+    write_button = mo.ui.run_button(label=f"Write {len(ref_candidates)} IDs")
+    mo.vstack([cohort_out_input, write_button])
+    return cohort_out_input, write_button
+
+
+@app.cell
+def _(
+    Path,
+    cohort_out_input,
+    csv_input,
+    extra_query_input,
+    iso_filtered,
+    mo,
+    ref_candidates,
+    ref_mode,
+    sg_dropdown,
+    tol_slider,
+    write_button,
+):
+    from datetime import datetime
+
+    import yaml
+
+    mo.stop(not write_button.value, mo.md("*Click the button above to write the cohort file.*"))
+    mo.stop(ref_candidates.empty, mo.md("*No isomorphous structures to export.*"))
+
+    _out = Path(cohort_out_input.value.strip())
+    _ids = ref_candidates["pdb_id"].astype(str).tolist()
+    _out.parent.mkdir(parents=True, exist_ok=True)
+    _out.write_text("\n".join(_ids) + "\n")
+
+    _extra_query = extra_query_input.value.strip() or None
+    _cell_cols = ["cell_a", "cell_b", "cell_c", "cell_alpha", "cell_beta", "cell_gamma"]
+    _meta = {
+        "parent_cohort": Path(csv_input.value.strip()).parent.name,
+        "subset_txt": _out.name,
+        "split_criterion": "same_space_group_and_isomorphous_cell"
+        + ("_and_column_filter" if _extra_query else ""),
+        "space_group": sg_dropdown.value,
+        "reference_cell_mode": ref_mode.value,
+        "tolerance_pct": float(tol_slider.value),
+        "additional_filter_query": _extra_query,
+        "cell_ranges": {
+            c: [float(iso_filtered[c].min()), float(iso_filtered[c].max())] for c in _cell_cols
+        },
+        "suggested_reference_pdb": str(ref_candidates.iloc[0]["pdb_id"]),
+        "n_structures": len(_ids),
+        "generated_by": "notebooks/optional_find_isomorphous_subset_and_align_ref.py",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _yaml_path = _out.with_suffix(".yaml")
+    _yaml_path.write_text(yaml.safe_dump(_meta, sort_keys=False))
+
+    mo.callout(
+        mo.md(f"Wrote **{len(_ids)}** PDB IDs → `{_out}`\n\nProvenance → `{_yaml_path}`"),
+        kind="success",
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    # Part 2 — Optional deep dive
+
+    Everything below reads the **precomputed** pairwise matrix
+    (`pairwise_metrics_<cutoff>.csv` from `scripts/pairwise_water_metrics.py`) on
+    top of `metadata.csv`. It is diagnostic — evidence for the space group and
+    tolerance chosen in Part 1 — and is safe to skip. Part 1 stands on its own
+    and never depends on anything here.
+
+    *(Export of a deep-dive-selected subset — a below-threshold cluster or a
+    cross-metric-agreed set — is still to be designed; for now these sections
+    only inform the Part 1 export.)*
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 5 — Subgroup clustermaps (Cα RMSD & unit-cell difference)
 
     Hierarchically-clustered heatmaps of the **precomputed** pairwise matrix
     (`pairwise_metrics_<cutoff>.csv` from `scripts/pairwise_water_metrics.py`).
@@ -181,7 +474,7 @@ def _(Path, mo, pairwise_input):
             f"**pairwise_metrics.csv not found:** `{_pw_path}`\n\n"
             "Generate it first (needs filtered CIFs):\n\n"
             "```\n"
-            "uv run scripts/filter_waters_by_distance.py data/<cohort>.txt -j 4\n"
+            "uv run scripts/filter_waters.py data/<cohort>.txt -j 4\n"
             "uv run scripts/pairwise_water_metrics.py data/<cohort>.txt\n"
             "```"
         ),
@@ -278,7 +571,7 @@ def _(cell_sym, subgroup_clustermap):
 @app.cell
 def _(mo):
     mo.md("""
-    ## 1c — Below-threshold clusters
+    ## 6 — Below-threshold clusters
 
     Pick a metric (Cα RMSD or unit-cell difference) and a threshold, then cut the
     same pairwise matrix with **complete linkage** so every pair *inside* a
@@ -410,89 +703,351 @@ def _(cell_sym, df, mo, rmsd_sym, threshold_metric, threshold_value):
 @app.cell
 def _(mo):
     mo.md("""
-    ## 2 — Isomorphousness filter
+    ## 7 — Cross-metric agreement (conformation vs crystal form)
 
-    Pick the space group to work in (defaults to the most populated), a
-    reference cell, and a tolerance. A structure is *isomorphous* if
-    `max_cell_diff(cell, reference_cell)` is at or below the tolerance.
+    Two partitions of the *same* structures: a **crystal-form** partition (space
+    group first, then a within-SG unit-cell cut) and a **conformational**
+    partition (a Cα-RMSD cut). This section asks *how much the two agree*, using
+    the standard toolkit for comparing two clusterings.
 
-    **Reference cell** options:
-    - *highest resolution* — anchor on the structure you'd most likely align to.
-    - *median cell* — anchor on the cohort's central cell (robust to outliers).
+    Cell diff is only comparable **within** a space group (different SGs constrain
+    the cell differently), so it is never used across SGs — the crystal-form
+    partition splits by space group first and only subdivides by cell *inside*
+    each group.
+
+    - **Threshold-free** — a Mantel test: Spearman correlation between the two
+      pairwise matrices with a permutation p-value. The scatter shows the same
+      pairs, split by whether the two structures share a space group.
+    - **Threshold-based** — cut both into subgroups, then compare with a
+      contingency / Jaccard heatmap, the chance-corrected **Adjusted Rand Index**,
+      and normalized mutual information. An ARI sweep over the cutoff ranges
+      (RMSD 0.5–1.0 Å, cell 2–5 %) shows whether the agreement is robust or an
+      artifact of one hand-picked pair of thresholds.
     """)
     return
 
 
 @app.cell
 def _(mo, sg_counts):
-    sg_dropdown = mo.ui.dropdown(
+    cross_metric_sg = mo.ui.dropdown(
         options=sg_counts.index.astype(str).tolist(),
         value=str(sg_counts.index[0]),
-        label="Space group",
+        label="Space group for the Mantel test (cell diff only meaningful within one SG)",
     )
-    ref_mode = mo.ui.dropdown(
-        options=["median cell", "highest resolution"],
-        value="median cell",
-        label="Reference cell",
+    rmsd_cut = mo.ui.slider(
+        start=0.4, stop=1.2, step=0.05, value=0.75, show_value=True,
+        label="Cα RMSD cut (Å) — conformational subgroups",
     )
-    tol_slider = mo.ui.slider(
-        start=0.0, stop=10.0, step=0.25, value=2.0, label="Tolerance (max cell diff %)",
-        show_value=True,
+    cell_cut = mo.ui.slider(
+        start=1.0, stop=6.0, step=0.25, value=3.0, show_value=True,
+        label="within-SG cell-diff cut (%) — crystal-form subgroups",
     )
-    mo.vstack([sg_dropdown, ref_mode, tol_slider])
-    return ref_mode, sg_dropdown, tol_slider
+    min_subgroup_size = mo.ui.number(
+        start=1, stop=50, step=1, value=5,
+        label="Min subgroup size shown in the contingency / Jaccard heatmaps",
+    )
+    mo.vstack([cross_metric_sg, rmsd_cut, cell_cut, min_subgroup_size])
+    return cell_cut, cross_metric_sg, min_subgroup_size, rmsd_cut
 
 
 @app.cell
-def _(df, gemmi, max_cell_diff, mo, ref_mode, sg_dropdown, tol_slider):
-    _cols = ["cell_a", "cell_b", "cell_c", "cell_alpha", "cell_beta", "cell_gamma"]
+def _(cell_sym, df, plt, rmsd_sym):
+    import numpy as _np
+    from scipy.stats import spearmanr as _spearmanr
 
-    in_sg = df[df["space_group"].astype(str) == sg_dropdown.value].copy()
-    mo.stop(in_sg.empty, mo.md("No structures in that space group."))
-
-    def _cell(row):
-        return gemmi.UnitCell(*(float(row[c]) for c in _cols))
-
-    if ref_mode.value == "highest resolution":
-        _ref_row = in_sg.sort_values("resolution").iloc[0]
-        ref_cell = _cell(_ref_row)
-        ref_label = f"{_ref_row['pdb_id']} (res {_ref_row['resolution']:.2f} Å)"
-    else:
-        _med = in_sg[_cols].median()
-        ref_cell = gemmi.UnitCell(*(float(_med[c]) for c in _cols))
-        ref_label = "median cell"
-
-    in_sg["max_cell_diff_pct"] = in_sg.apply(
-        lambda r: max_cell_diff(_cell(r), ref_cell), axis=1
+    _order = list(rmsd_sym.index)
+    _space_group = (
+        df.set_index("pdb_id")["space_group"].astype(str).reindex(_order).fillna("?").to_numpy()
     )
-    in_sg["isomorphous"] = in_sg["max_cell_diff_pct"] <= tol_slider.value
+    _upper = _np.triu_indices(len(_order), k=1)
+    _rmsd_pairs = rmsd_sym.to_numpy(dtype=float)[_upper]
+    _cell_pairs = cell_sym.to_numpy(dtype=float)[_upper]
+    _same_sg = (_space_group[:, None] == _space_group[None, :])[_upper]
+    _valid = ~(_np.isnan(_rmsd_pairs) | _np.isnan(_cell_pairs))
 
-    _n_iso = int(in_sg["isomorphous"].sum())
-    mo.md(
-        f"Space group **{sg_dropdown.value}**: {len(in_sg)} structures.\n\n"
-        f"Reference cell: **{ref_label}** — `{ref_cell}`\n\n"
-        f"Within **{tol_slider.value}%** tolerance: "
-        f"**{_n_iso} isomorphous** / {len(in_sg) - _n_iso} excluded."
+    def _rho(_mask):
+        _selected = _mask & _valid
+        if _selected.sum() < 3:
+            return None
+        return _spearmanr(_rmsd_pairs[_selected], _cell_pairs[_selected]).statistic
+
+    _rho_all = _rho(_np.ones_like(_valid))
+    _rho_same = _rho(_same_sg)
+    _rho_cross = _rho(~_same_sg)
+
+    _fig, _ax = plt.subplots(figsize=(6.5, 5))
+    _cross_mask = (~_same_sg) & _valid
+    _same_mask = _same_sg & _valid
+    _ax.scatter(
+        _rmsd_pairs[_cross_mask], _cell_pairs[_cross_mask],
+        s=10, alpha=0.3, color="0.6", label="different SG (cell diff not comparable)",
     )
-    return (in_sg,)
+    _ax.scatter(
+        _rmsd_pairs[_same_mask], _cell_pairs[_same_mask],
+        s=12, alpha=0.6, color="steelblue", label="same SG",
+    )
+    _ax.set_xlabel("Cα RMSD (Å)")
+    _ax.set_ylabel("max cell diff (%)")
 
+    def _fmt(_value):
+        return "n/a" if _value is None else f"{_value:.2f}"
 
-@app.cell
-def _():
-    set_a = set("3o5p, 3o5q, 3o5r, 4drm, 4dro, 4drq, 4jfj, 4jfk, 4jfl, 4jfm, 4tx0, 4w9q, 5bxj, 5obk, 6tx4, 6tx5, 6tx6, 6tx7, 6tx8, 6tx9, 7apq, 7apt, 7apw, 7etv, 8chp, 8chq, 8r5k, 9ey3, 9ey4".split(", "))
-    set_b = set("3o5p, 3o5r, 4drm, 4dro, 4drq, 4jfj, 4jfk, 4jfm, 4tx0, 4w9q, 5obk, 6tx4, 6tx5, 6tx6, 6tx7, 6tx8, 6tx9, 7apq, 7apt, 7apw, 7ett, 7etu, 7etv, 8chp, 8chq, 8r5k, 9ey3, 9ey4".split(", "))
-    len(set_a.intersection(set_b))
+    _ax.set_title(
+        "Pairwise RMSD vs cell diff\n"
+        f"Spearman ρ — all {_fmt(_rho_all)} | same SG {_fmt(_rho_same)} | "
+        f"different SG {_fmt(_rho_cross)}",
+        fontsize=10,
+    )
+    _ax.legend(fontsize=8, frameon=False)
+    _fig.tight_layout()
+    _fig
     return
 
 
 @app.cell
-def _(in_sg, plt):
-    _fig, _ax = plt.subplots(figsize=(7, 3))
-    _ax.hist(in_sg["max_cell_diff_pct"], bins=40, color="steelblue")
-    # _ax.hist(in_sg["unit_cell_volume"], bins=40, color="steelblue")
-    _ax.set_xlabel("max cell diff from reference (%)")
-    _ax.set_ylabel("Structures")
-    _ax.set_title("Unit-cell deviation within the selected space group")
+def _(cell_sym, cross_metric_sg, df, mo, rmsd_sym):
+    import numpy as _np
+    from scipy.cluster.hierarchy import cophenet as _cophenet, linkage as _linkage
+    from scipy.spatial.distance import squareform as _squareform
+    from scipy.stats import spearmanr as _spearmanr
+
+    _space_group = df.set_index("pdb_id")["space_group"].astype(str)
+    _members = [
+        _pdb for _pdb in rmsd_sym.index if _space_group.get(_pdb) == cross_metric_sg.value
+    ]
+    _rmsd_sub = rmsd_sym.loc[_members, _members]
+    _cell_sub = cell_sym.loc[_members, _members]
+    _keep = [
+        _m for _m in _members
+        if not (_rmsd_sub.loc[_m].isna().any() or _cell_sub.loc[_m].isna().any())
+    ]
+    _rmsd_sub = _rmsd_sub.loc[_keep, _keep]
+    _cell_sub = _cell_sub.loc[_keep, _keep]
+
+    def _condensed(_matrix):
+        _d = _matrix.to_numpy(dtype=float)
+        _d = (_d + _d.T) / 2.0
+        _np.fill_diagonal(_d, 0.0)
+        return _squareform(_d, checks=False)
+
+    if len(_keep) < 5:
+        _out = mo.md(
+            f"**Mantel test — {cross_metric_sg.value}:** only {len(_keep)} clean "
+            "structures; need at least 5."
+        )
+    else:
+        _rmsd_condensed = _condensed(_rmsd_sub)
+        _cell_condensed = _condensed(_cell_sub)
+        _observed = _spearmanr(_rmsd_condensed, _cell_condensed).statistic
+
+        _n = len(_keep)
+        _upper = _np.triu_indices(_n, k=1)
+        _cell_full = _cell_sub.to_numpy(dtype=float)
+        _cell_full = (_cell_full + _cell_full.T) / 2.0
+        _np.fill_diagonal(_cell_full, 0.0)
+        _rng = _np.random.default_rng(0)
+        _permutations = 999
+        _count = 1
+        for _ in range(_permutations):
+            _perm = _rng.permutation(_n)
+            _permuted = _cell_full[_np.ix_(_perm, _perm)][_upper]
+            if abs(_spearmanr(_rmsd_condensed, _permuted).statistic) >= abs(_observed):
+                _count += 1
+        _p_value = _count / (_permutations + 1)
+
+        _coph_rmsd = _cophenet(_linkage(_rmsd_condensed, method="complete"))
+        _coph_cell = _cophenet(_linkage(_cell_condensed, method="complete"))
+        _coph_corr = _spearmanr(_coph_rmsd, _coph_cell).statistic
+
+        _out = mo.md(
+            f"### Mantel test — {cross_metric_sg.value} ({_n} structures)\n\n"
+            f"- **Matrix correlation** (Spearman ρ, RMSD vs cell diff): "
+            f"**{_observed:.3f}**\n"
+            f"- **Permutation p-value** ({_permutations} permutations): "
+            f"**{_p_value:.3f}**\n"
+            f"- **Cophenetic correlation** (RMSD tree vs cell tree): {_coph_corr:.3f}\n\n"
+            "Threshold-free: no cut is chosen. A high ρ with small p means the two "
+            "metrics order structure pairs consistently *within this space group*."
+        )
+    _out
+    return
+
+
+@app.cell
+def _(cell_cut, cell_sym, df, mo, rmsd_cut, rmsd_sym):
+    import numpy as _np
+    import pandas as _pd
+    from scipy.cluster.hierarchy import fcluster as _fcluster, linkage as _linkage
+    from scipy.spatial.distance import squareform as _squareform
+    from scipy.special import comb as _comb
+
+    cross_metric_order = list(rmsd_sym.index)
+    _space_group = (
+        df.set_index("pdb_id")["space_group"].astype(str).reindex(cross_metric_order).fillna("?")
+    )
+
+    def _complete_linkage(matrix):
+        _d = matrix.to_numpy(dtype=float).copy()
+        _d[_np.isnan(_d)] = _np.nanmax(_d)
+        _d = (_d + _d.T) / 2.0
+        _np.fill_diagonal(_d, 0.0)
+        return _linkage(_squareform(_d, checks=False), method="complete")
+
+    _rmsd_linkage = _complete_linkage(rmsd_sym)
+
+    _cell_linkages = {}
+    for _sg_name, _idx in _space_group.groupby(_space_group).groups.items():
+        _sg_members = list(_idx)
+        _sg_linkage = _complete_linkage(cell_sym.loc[_sg_members, _sg_members]) if len(_sg_members) >= 2 else None
+        _cell_linkages[_sg_name] = (_sg_members, _sg_linkage)
+
+    def build_conformational_partition(rmsd_threshold):
+        _labels = _fcluster(_rmsd_linkage, t=rmsd_threshold, criterion="distance")
+        return _pd.Series(_labels, index=cross_metric_order)
+
+    def build_crystal_form_partition(cell_threshold):
+        _labels = _pd.Series(index=cross_metric_order, dtype=object)
+        for _sg_name, (_sg_members, _sg_linkage) in _cell_linkages.items():
+            if _sg_linkage is None:
+                _local = [1] * len(_sg_members)
+            else:
+                _local = _fcluster(_sg_linkage, t=cell_threshold, criterion="distance")
+            for _member, _sub in zip(_sg_members, _local):
+                _labels[_member] = f"{_sg_name}#{int(_sub)}"
+        return _labels
+
+    def adjusted_rand_index(labels_a, labels_b):
+        _table = _pd.crosstab(labels_a, labels_b).to_numpy(dtype=float)
+        _n = _table.sum()
+        _sum_cells = _comb(_table, 2).sum()
+        _sum_a = _comb(_table.sum(axis=1), 2).sum()
+        _sum_b = _comb(_table.sum(axis=0), 2).sum()
+        _expected = _sum_a * _sum_b / _comb(_n, 2)
+        _max_index = 0.5 * (_sum_a + _sum_b)
+        if _max_index == _expected:
+            return 1.0
+        return float((_sum_cells - _expected) / (_max_index - _expected))
+
+    def _normalized_mutual_info(labels_a, labels_b):
+        _table = _pd.crosstab(labels_a, labels_b).to_numpy(dtype=float)
+        _joint = _table / _table.sum()
+        _pa = _joint.sum(axis=1)
+        _pb = _joint.sum(axis=0)
+        _expected = _np.outer(_pa, _pb)
+        _nonzero = _joint > 0
+        _mutual = float((_joint[_nonzero] * _np.log(_joint[_nonzero] / _expected[_nonzero])).sum())
+        _entropy_a = float(-(_pa[_pa > 0] * _np.log(_pa[_pa > 0])).sum())
+        _entropy_b = float(-(_pb[_pb > 0] * _np.log(_pb[_pb > 0])).sum())
+        if _entropy_a == 0 or _entropy_b == 0:
+            return 0.0
+        return _mutual / _np.sqrt(_entropy_a * _entropy_b)
+
+    conformational_labels = build_conformational_partition(float(rmsd_cut.value))
+    crystal_form_labels = build_crystal_form_partition(float(cell_cut.value))
+
+    _ari = adjusted_rand_index(crystal_form_labels, conformational_labels)
+    _nmi = _normalized_mutual_info(crystal_form_labels, conformational_labels)
+
+    mo.md(
+        f"### Partition agreement — RMSD ≤ {float(rmsd_cut.value):g} Å, "
+        f"cell ≤ {float(cell_cut.value):g} %\n\n"
+        f"- **Crystal-form subgroups** (SG × within-SG cell cut): "
+        f"**{crystal_form_labels.nunique()}**\n"
+        f"- **Conformational subgroups** (RMSD cut): "
+        f"**{conformational_labels.nunique()}**\n"
+        f"- **Adjusted Rand Index**: **{_ari:.3f}**  (0 = chance, 1 = identical)\n"
+        f"- **Normalized mutual information**: {_nmi:.3f}\n"
+    )
+    return (
+        adjusted_rand_index,
+        build_conformational_partition,
+        build_crystal_form_partition,
+        conformational_labels,
+        crystal_form_labels,
+    )
+
+
+@app.cell
+def _(conformational_labels, crystal_form_labels, min_subgroup_size, mo, plt):
+    import pandas as _pd
+    import seaborn as _sns
+
+    _min_size = int(min_subgroup_size.value)
+    _crystal_sizes = crystal_form_labels.value_counts()
+    _conf_sizes = conformational_labels.value_counts()
+    _crystal_keep = [_c for _c, _n in _crystal_sizes.items() if _n >= _min_size]
+    _conf_keep = [_c for _c, _n in _conf_sizes.items() if _n >= _min_size]
+
+    mo.stop(
+        not _crystal_keep or not _conf_keep,
+        mo.md(f"*No subgroup reaches {_min_size} members on both axes — lower the minimum size.*"),
+    )
+
+    _table = (
+        _pd.crosstab(crystal_form_labels, conformational_labels)
+        .reindex(index=_crystal_keep, columns=_conf_keep)
+        .fillna(0)
+    )
+    _jaccard = _table.astype(float).copy()
+    for _row in _table.index:
+        for _col in _table.columns:
+            _shared = _table.loc[_row, _col]
+            _union = _crystal_sizes[_row] + _conf_sizes[_col] - _shared
+            _jaccard.loc[_row, _col] = _shared / _union if _union else 0.0
+
+    _fig, _axes = plt.subplots(
+        1, 2,
+        figsize=(max(9, 0.6 * len(_conf_keep) + 5), max(4, 0.4 * len(_crystal_keep) + 2)),
+    )
+    _sns.heatmap(
+        _table.astype(int), ax=_axes[0], cmap="Blues", annot=True, fmt="d",
+        cbar_kws={"label": "shared structures"}, linewidths=0.5, linecolor="white",
+    )
+    _axes[0].set_title(f"Contingency (subgroups ≥ {_min_size})")
+    _axes[0].set_xlabel("conformational subgroup")
+    _axes[0].set_ylabel("crystal-form subgroup")
+    _sns.heatmap(
+        _jaccard, ax=_axes[1], cmap="rocket", vmin=0, vmax=1, annot=True, fmt=".2f",
+        cbar_kws={"label": "Jaccard"}, linewidths=0.5, linecolor="white",
+    )
+    _axes[1].set_title("Jaccard overlap")
+    _axes[1].set_xlabel("conformational subgroup")
+    _axes[1].set_ylabel("")
+    _fig.tight_layout()
+    _fig
+    return
+
+
+@app.cell
+def _(
+    adjusted_rand_index,
+    build_conformational_partition,
+    build_crystal_form_partition,
+    plt,
+):
+    import numpy as _np
+    import pandas as _pd
+    import seaborn as _sns
+
+    _rmsd_grid = _np.round(_np.arange(0.5, 1.001, 0.1), 2)
+    _cell_grid = _np.round(_np.arange(2.0, 5.001, 0.5), 2)
+
+    _conf_by = {float(_r): build_conformational_partition(float(_r)) for _r in _rmsd_grid}
+    _cryst_by = {float(_c): build_crystal_form_partition(float(_c)) for _c in _cell_grid}
+
+    _ari = _pd.DataFrame(index=_cell_grid, columns=_rmsd_grid, dtype=float)
+    for _c in _cell_grid:
+        for _r in _rmsd_grid:
+            _ari.loc[_c, _r] = adjusted_rand_index(_cryst_by[float(_c)], _conf_by[float(_r)])
+
+    _fig, _ax = plt.subplots(figsize=(7, 5))
+    _sns.heatmap(
+        _ari.astype(float), ax=_ax, cmap="viridis", vmin=0, vmax=1, annot=True, fmt=".2f",
+        cbar_kws={"label": "Adjusted Rand Index"}, linewidths=0.5, linecolor="white",
+    )
+    _ax.set_xlabel("Cα RMSD cut (Å)")
+    _ax.set_ylabel("within-SG cell-diff cut (%)")
+    _ax.set_title("Partition agreement (ARI) across the cutoff ranges")
     _fig.tight_layout()
     _fig
     return
@@ -501,130 +1056,7 @@ def _(in_sg, plt):
 @app.cell
 def _(mo):
     mo.md("""
-    ## 3 — Alignment-reference candidates
-
-    Isomorphous structures sorted by resolution. The top row is the
-    best-resolution isomorphous structure — the natural alignment reference.
-    """)
-    return
-
-
-@app.cell
-def _(in_sg):
-    _show = [
-        "pdb_id",
-        "resolution",
-        "r_free",
-        "max_cell_diff_pct",
-        "num_water",
-        "unit_cell_volume",
-    ]
-    ref_candidates = (
-        in_sg[in_sg["isomorphous"]]
-        .sort_values("resolution")[_show]
-        .reset_index(drop=True)
-    )
-    ref_candidates
-    return (ref_candidates,)
-
-
-@app.cell
-def _(mo, ref_candidates):
-    mo.stop(ref_candidates.empty, mo.md("*No isomorphous structures at this tolerance.*"))
-    _top = ref_candidates.iloc[0]
-    mo.callout(
-        mo.md(
-            f"**Suggested reference: `{_top['pdb_id']}`** — "
-            f"resolution {_top['resolution']:.2f} Å, "
-            f"{int(_top['num_water'])} waters, "
-            f"cell diff {_top['max_cell_diff_pct']:.2f}% from reference."
-        ),
-        kind="success",
-    )
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## 4 — Export isomorphous cohort
-
-    Write the isomorphous subset (Section 3) to a cohort `.txt` — one PDB ID per
-    line — to feed the filter / align / cluster scripts, plus a sidecar `.yaml`
-    recording the split criteria (space group, tolerance, reference) so the
-    subset is reproducible. Set the path, then click the button (it only writes
-    on click).
-    """)
-    return
-
-
-@app.cell
-def _(cohort_input, mo, ref_candidates):
-    cohort_out_input = mo.ui.text(
-        value=f"data/{cohort_input.value.strip()}_iso.txt",
-        placeholder="data/<cohort>_iso.txt",
-        label="Cohort .txt output path",
-        full_width=True,
-    )
-    write_button = mo.ui.run_button(label=f"Write {len(ref_candidates)} IDs")
-    mo.vstack([cohort_out_input, write_button])
-    return cohort_out_input, write_button
-
-
-@app.cell
-def _(
-    Path,
-    cohort_out_input,
-    csv_input,
-    in_sg,
-    mo,
-    ref_candidates,
-    ref_mode,
-    sg_dropdown,
-    tol_slider,
-    write_button,
-):
-    from datetime import datetime
-
-    import yaml
-
-    mo.stop(not write_button.value, mo.md("*Click the button above to write the cohort file.*"))
-    mo.stop(ref_candidates.empty, mo.md("*No isomorphous structures to export.*"))
-
-    _out = Path(cohort_out_input.value.strip())
-    _ids = ref_candidates["pdb_id"].astype(str).tolist()
-    _out.parent.mkdir(parents=True, exist_ok=True)
-    _out.write_text("\n".join(_ids) + "\n")
-
-    _iso = in_sg[in_sg["isomorphous"]]
-    _cell_cols = ["cell_a", "cell_b", "cell_c", "cell_alpha", "cell_beta", "cell_gamma"]
-    _meta = {
-        "parent_cohort": Path(csv_input.value.strip()).parent.name,
-        "subset_txt": _out.name,
-        "split_criterion": "same_space_group_and_isomorphous_cell",
-        "space_group": sg_dropdown.value,
-        "reference_cell_mode": ref_mode.value,
-        "tolerance_pct": float(tol_slider.value),
-        "cell_ranges": {c: [float(_iso[c].min()), float(_iso[c].max())] for c in _cell_cols},
-        "suggested_reference_pdb": str(ref_candidates.iloc[0]["pdb_id"]),
-        "n_structures": len(_ids),
-        "generated_by": "notebooks/optional_find_isomorphous_subset_and_align_ref.py",
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    _yaml_path = _out.with_suffix(".yaml")
-    _yaml_path.write_text(yaml.safe_dump(_meta, sort_keys=False))
-
-    mo.callout(
-        mo.md(f"Wrote **{len(_ids)}** PDB IDs → `{_out}`\n\nProvenance → `{_yaml_path}`"),
-        kind="success",
-    )
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## Explore — Partition balance (volcano feasibility)
+    ## 8 — Partition balance (volcano feasibility)
 
     Type a boolean expression over the metadata columns. **Arm A** = rows that
     match; **Arm B** = everyone else. A volcano comparing water-cluster
