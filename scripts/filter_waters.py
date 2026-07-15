@@ -1,13 +1,15 @@
 """Filter waters by protein distance (and optionally EDIA / B-factor) for a cohort .txt.
 
 Usage:
-    uv run scripts/filter_waters_by_distance.py <cohort.txt> [--cutoff 4.0] \
+    uv run scripts/filter_waters.py <cohort.txt> [--cutoff 4.0] \
         [--edia-cutoff X] [--drop-if-no-edia-json] \
         [--bfactor-cutoff X] [--bfactor-mode zscore|absolute] \
-        [--bfactor-population water|protein|all]
+        [--bfactor-population water|protein|all] [--exclusive-borderline]
 
 Distance filtering always runs (relocating each water to its canonical ASU position).
 EDIA and B-factor filtering are optional, off by default, and applied to the survivors.
+The EDIA and B-factor cutoffs are inclusive by default (waters exactly on the cutoff are
+kept); --exclusive-borderline makes them strict.
 
 Writes filtered CIFs to data/<cohort_id>/filtered_pdbs/<member_id>.cif.
 Writes filtering_report_<cutoff>A[_edia<X>][_bfactor_...].csv to the same directory;
@@ -44,6 +46,7 @@ def _filter_one(
     bfactor_cutoff: float | None,
     bfactor_mode: str,
     bfactor_population: str,
+    exclusive_borderline: bool,
 ) -> tuple[dict | None, str | None]:
     """Filter one structure's waters and write the result. Returns (report_row, error)."""
     try:
@@ -79,6 +82,7 @@ def _filter_one(
             bfactor_cutoff=bfactor_cutoff,
             bfactor_mode=bfactor_mode,
             bfactor_population=bfactor_population,
+            exclusive_borderline=exclusive_borderline,
         )
         write_filtered_cif(cif_file, keep_mask, filtered, out_path)
         return (
@@ -86,7 +90,7 @@ def _filter_one(
                 "pdb_id": member_id,
                 "n_waters_before": stats["n_water"],
                 "n_waters_moved": stats["n_moved"],
-                "n_waters_removed": stats["n_removed_distance"],
+                "n_waters_removed_by_distance": stats["n_removed_distance"],
                 "n_waters_removed_edia": stats["n_removed_edia"],
                 "n_waters_removed_bfactor": stats["n_removed_bfactor"],
                 "n_waters_remaining": stats["n_water"]
@@ -115,11 +119,13 @@ def main() -> None:
         type=float,
         default=None,
         metavar="X",
-        help="Minimum EDIAm to keep a water (e.g. 0.8). Off by default (distance only).",
+        help="Keep waters with EDIAm >= X (e.g. 0.8), or > X with --exclusive-borderline. "
+        "Off by default (distance only).",
     )
     parser.add_argument(
         "--drop-if-no-edia-json",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="With --edia-cutoff, drop all waters of a structure whose EDIA JSON is "
         "missing (default: keep them and warn).",
     )
@@ -128,22 +134,30 @@ def main() -> None:
         type=float,
         default=None,
         metavar="X",
-        help="B-factor cutoff to keep a water. Off by default. In z-score mode "
-        "(default) waters with B-factor z-score above X are dropped; in absolute mode "
-        "waters with raw B-factor above X are dropped.",
+        help="Keep waters with B-factor z-score <= X, or < X with --exclusive-borderline. "
+        "With --bfactor-mode absolute, X is compared against the raw B-factor instead. "
+        "Off by default.",
     )
     parser.add_argument(
         "--bfactor-mode",
         choices=("zscore", "absolute"),
-        default="zscore",
+        default=None,
         help="How --bfactor-cutoff is interpreted (default: zscore).",
     )
     parser.add_argument(
         "--bfactor-population",
         choices=("water", "protein", "all"),
-        default="water",
+        default=None,
         help="Reference population for the B-factor z-score (default: water). "
         "Ignored when --bfactor-mode absolute.",
+    )
+    parser.add_argument(
+        "--exclusive-borderline",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Treat the EDIA and B-factor cutoffs as strict, dropping waters sitting "
+        "exactly on a cutoff (default: inclusive, borderline waters kept). Distance is "
+        "always inclusive.",
     )
     parser.add_argument(
         "--output-dir",
@@ -163,6 +177,13 @@ def main() -> None:
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")
     verbosity.add_argument("--quiet", action="store_true", help="Show warnings and errors only")
     args = parser.parse_args()
+
+    edia_cutoff = args.edia_cutoff if args.edia_cutoff is not None else getattr(config, "EDIA_CUTOFF", None)
+    bfactor_cutoff = args.bfactor_cutoff if args.bfactor_cutoff is not None else getattr(config, "BFACTOR_CUTOFF", None)
+    bfactor_mode = args.bfactor_mode if args.bfactor_mode is not None else getattr(config, "BFACTOR_MODE", "zscore")
+    bfactor_population = args.bfactor_population if args.bfactor_population is not None else getattr(config, "BFACTOR_POPULATION", "water")
+    drop_if_no_edia_json = args.drop_if_no_edia_json if args.drop_if_no_edia_json is not None else getattr(config, "DROP_IF_NO_EDIA_JSON", False)
+    exclusive_borderline = args.exclusive_borderline if args.exclusive_borderline is not None else getattr(config, "FILTER_BORDERLINE_EXCLUSIVE", False)
 
     logger.remove()
     if args.quiet:
@@ -197,17 +218,19 @@ def main() -> None:
         logger.warning(f"Missing CIFs: {', '.join(missing)}")
     logger.info(f"Output:  {out_dir}")
     logger.info(f"Cutoff:  {args.cutoff} Å")
-    if args.edia_cutoff is not None:
-        logger.info(f"EDIA:    min {args.edia_cutoff}")
+    edia_op = ">" if exclusive_borderline else ">="
+    bfactor_op = "<" if exclusive_borderline else "<="
+    if edia_cutoff is not None:
+        logger.info(f"EDIA:    {edia_op} {edia_cutoff}")
         no_json = [m for m, p in edia_paths.items() if not p.exists()]
         if no_json:
-            action = "drop all their waters" if args.drop_if_no_edia_json else "keep their waters"
+            action = "drop all their waters" if drop_if_no_edia_json else "keep their waters"
             logger.warning(f"Missing EDIA JSON for {len(no_json)} structure(s) — will {action}: {', '.join(no_json)}")
-    if args.bfactor_cutoff is not None:
-        if args.bfactor_mode == "zscore":
-            logger.info(f"B-factor: z-score <= {args.bfactor_cutoff} ({args.bfactor_population} population)")
+    if bfactor_cutoff is not None:
+        if bfactor_mode == "zscore":
+            logger.info(f"B-factor: z-score {bfactor_op} {bfactor_cutoff} ({bfactor_population} population)")
         else:
-            logger.info(f"B-factor: absolute <= {args.bfactor_cutoff}")
+            logger.info(f"B-factor: absolute {bfactor_op} {bfactor_cutoff}")
     logger.info(f"Jobs:    {args.jobs}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -219,11 +242,12 @@ def main() -> None:
             out_dir / f"{m}.cif",
             args.cutoff,
             edia_paths[m],
-            args.edia_cutoff,
-            args.drop_if_no_edia_json,
-            args.bfactor_cutoff,
-            args.bfactor_mode,
-            args.bfactor_population,
+            edia_cutoff,
+            drop_if_no_edia_json,
+            bfactor_cutoff,
+            bfactor_mode,
+            bfactor_population,
+            exclusive_borderline,
         )
         for m in found
     )
@@ -236,7 +260,7 @@ def main() -> None:
             rows.append(row)
             logger.debug(
                 f"  {row['pdb_id']}: {row['n_waters_before']} waters  "
-                f"moved {row['n_waters_moved']}  removed {row['n_waters_removed']}  "
+                f"moved {row['n_waters_moved']}  removed {row['n_waters_removed_by_distance']}  "
                 f"edia-removed {row['n_waters_removed_edia']}  "
                 f"bfactor-removed {row['n_waters_removed_bfactor']}  "
                 f"→ {row['n_waters_remaining']} remaining"
@@ -249,18 +273,18 @@ def main() -> None:
         "pdb_id",
         "n_waters_before",
         "n_waters_moved",
-        "n_waters_removed",
+        "n_waters_removed_by_distance",
         "n_waters_remaining",
     ]
-    if args.edia_cutoff is not None:
-        cutoff_str += f"_edia{args.edia_cutoff:.2f}"
+    if edia_cutoff is not None:
+        cutoff_str += f"_edia{edia_cutoff:.2f}"
         fieldnames[4:4] = ["n_waters_removed_edia"]
         fieldnames.append("edia_applied")
-    if args.bfactor_cutoff is not None:
-        if args.bfactor_mode == "zscore":
-            cutoff_str += f"_bfactor_z{args.bfactor_cutoff:.2f}{args.bfactor_population}"
+    if bfactor_cutoff is not None:
+        if bfactor_mode == "zscore":
+            cutoff_str += f"_bfactor_z{bfactor_cutoff:.2f}{bfactor_population}"
         else:
-            cutoff_str += f"_bfactor_abs{args.bfactor_cutoff:.2f}"
+            cutoff_str += f"_bfactor_abs{bfactor_cutoff:.2f}"
         fieldnames.insert(fieldnames.index("n_waters_remaining"), "n_waters_removed_bfactor")
     report_path = out_dir / f"filtering_report_{cutoff_str}.csv"
     with open(report_path, "w", newline="") as f:

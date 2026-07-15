@@ -93,10 +93,13 @@ def keep_by_edia(
     water_atoms: struc.AtomArray,
     edia_lists: dict[tuple[str, int, str], list[float]],
     cutoff: float,
+    exclusive_borderline: bool = False,
 ) -> np.ndarray:
-    """EDIA filter (coordinate-independent). Keep waters whose EDIAm >= `cutoff`; a
-    missing score is dropped (NaN >= cutoff is False), so an empty `edia_lists` drops
-    every water — the "structure has no EDIA JSON, drop it" policy.
+    """EDIA filter (coordinate-independent). Keep waters whose EDIAm passes `cutoff`;
+    inclusive by default (EDIAm >= cutoff), or strict (EDIAm > cutoff) when
+    `exclusive_borderline` is set — dropping waters sitting exactly on the cutoff. A
+    missing score is dropped either way (NaN comparisons are False), so an empty
+    `edia_lists` drops every water — the "structure has no EDIA JSON, drop it" policy.
 
     Altloc pairing follows cw.io.edia_scores_in_order (the EDIA JSON has no altloc
     field; the Nth water-O of a residue maps to the Nth score).
@@ -111,7 +114,8 @@ def keep_by_edia(
         )
         for i in range(len(water_atoms))
     ]
-    return edia_scores_in_order(keys, edia_lists) >= cutoff
+    scores = edia_scores_in_order(keys, edia_lists)
+    return scores > cutoff if exclusive_borderline else scores >= cutoff
 
 
 def keep_by_bfactor(
@@ -120,9 +124,11 @@ def keep_by_bfactor(
     cutoff: float,
     mode: str = "zscore",
     population: str = "water",
+    exclusive_borderline: bool = False,
 ) -> np.ndarray:
     """B-factor filter (coordinate-independent). Keep waters whose B-factor passes
-    `cutoff`.
+    `cutoff`; inclusive by default (<= cutoff), or strict (< cutoff) when
+    `exclusive_borderline` is set — dropping waters sitting exactly on the cutoff.
 
     mode="zscore" (default): keep waters whose B-factor z-score <= cutoff, where the
     z-score standardises each water's B-factor against a reference `population` of
@@ -136,7 +142,7 @@ def keep_by_bfactor(
     """
     water_b = atoms.b_factor[water_O_mask]
     if mode == "absolute":
-        return water_b <= cutoff
+        return water_b < cutoff if exclusive_borderline else water_b <= cutoff
     if mode != "zscore":
         raise ValueError(f"bfactor mode must be 'zscore' or 'absolute', got {mode!r}")
 
@@ -154,7 +160,8 @@ def keep_by_bfactor(
     std = ref.std()
     if std == 0:
         return np.ones(len(water_b), dtype=bool)
-    return (water_b - ref.mean()) / std <= cutoff
+    z = (water_b - ref.mean()) / std
+    return z < cutoff if exclusive_borderline else z <= cutoff
 
 
 def filter_waters(
@@ -167,6 +174,7 @@ def filter_waters(
     bfactor_cutoff: float | None = None,
     bfactor_mode: str = "zscore",
     bfactor_population: str = "water",
+    exclusive_borderline: bool = False,
 ) -> tuple[struc.AtomArray, dict[str, int], np.ndarray]:
     """Filter waters by composing per-water keep-masks, returning the filtered
     structure, a stats dict, and the CIF-row keep-mask.
@@ -193,6 +201,10 @@ def filter_waters(
     bfactor_mode     : "zscore" (default) or "absolute" — see keep_by_bfactor
     bfactor_population: reference population for the z-score — "water" (default),
                        "protein", or "all" (ignored when bfactor_mode="absolute")
+    exclusive_borderline: when True, the EDIA and B-factor cutoffs are strict, so a
+                       water sitting exactly on either cutoff is dropped; when False
+                       (default) the cutoffs are inclusive and borderline waters are
+                       kept. Distance is unaffected (always inclusive).
 
     Returns
     -------
@@ -224,13 +236,20 @@ def filter_waters(
     stats["n_removed_distance"] = int(np.sum(~keep))
 
     if edia_lists is not None and edia_cutoff is not None:
-        edia_keep = keep_by_edia(atoms[water_O_mask], edia_lists, edia_cutoff)
+        edia_keep = keep_by_edia(
+            atoms[water_O_mask], edia_lists, edia_cutoff, exclusive_borderline
+        )
         stats["n_removed_edia"] = int(np.sum(keep & ~edia_keep))
         keep &= edia_keep
 
     if bfactor_cutoff is not None:
         bfactor_keep = keep_by_bfactor(
-            atoms, water_O_mask, bfactor_cutoff, bfactor_mode, bfactor_population
+            atoms,
+            water_O_mask,
+            bfactor_cutoff,
+            bfactor_mode,
+            bfactor_population,
+            exclusive_borderline,
         )
         stats["n_removed_bfactor"] = int(np.sum(keep & ~bfactor_keep))
         keep &= bfactor_keep
