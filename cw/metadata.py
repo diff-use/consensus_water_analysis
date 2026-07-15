@@ -145,6 +145,28 @@ def fetch_starting_model(pdb_id: str) -> tuple[list[str], str]:
     return codes, status
 
 
+def resolve_deposited_r_factors(entry: dict | None) -> tuple[float | str, float | str]:
+    """Deposited R-work and R-free from an RCSB entry JSON's ``refine`` array.
+
+    These are the *deposited* values from RCSB, distinct from the local re-refined
+    ``r_work`` / ``r_free`` read out of the on-disk CIF. Returns the first parseable
+    value across ``refine`` blocks for each factor, else ``'<missing>'``.
+    """
+    def _first(key: str) -> float | str:
+        for r in entry.get("refine") or []:
+            v = r.get(key)
+            if v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return "<missing>"
+
+    if entry is None:
+        return "<missing>", "<missing>"
+    return _first("ls_R_factor_R_work"), _first("ls_R_factor_R_free")
+
+
 def metadata_row(cif_path: Path) -> dict:
     """Extract one metadata CSV row from a local mmCIF file + RCSB API.
 
@@ -152,7 +174,8 @@ def metadata_row(cif_path: Path) -> dict:
       - gemmi.read_structure → space_group, unit_cell, resolution, num_water
       - gemmi.cif.read       → r_work, r_free (local re-refined CIF has these)
                                ligand_names (from _pdbx_entity_nonpoly.comp_id loop)
-      - RCSB Data API        → experiment_condition, starting_model
+      - RCSB Data API        → experiment_condition, starting_model,
+                               deposited_r_work, deposited_r_free
                                (absent from re-refined local CIFs)
     """
     pdb_id = cif_path.stem.removesuffix("_final")
@@ -188,9 +211,10 @@ def metadata_row(cif_path: Path) -> dict:
     } - _WATER_COMPS
     ligand_names = "|".join(sorted(nonpoly_comp_ids)) if nonpoly_comp_ids else ""
 
-    # --- RCSB Data API: experiment condition and starting model ---
+    # --- RCSB Data API: experiment condition, starting model, deposited R-factors ---
     entry = _fetch_rcsb_entry(pdb_id)
     _codes, _status, starting_model = resolve_starting_model(entry, pdb_id)
+    deposited_r_work, deposited_r_free = resolve_deposited_r_factors(entry)
     if entry is not None:
         grow_blocks = entry.get("exptl_crystal_grow") or []
         grow_details = [
@@ -213,6 +237,8 @@ def metadata_row(cif_path: Path) -> dict:
         "resolution": resolution,
         "r_work": r_work,
         "r_free": r_free,
+        "deposited_r_work": deposited_r_work,
+        "deposited_r_free": deposited_r_free,
         "num_water": num_water,
         "ligand_names": ligand_names,
         "experiment_condition": experiment_condition,
