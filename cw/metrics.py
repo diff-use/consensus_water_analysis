@@ -139,6 +139,63 @@ def per_structure_consensus_pr(
     return pd.DataFrame(rows)
 
 
+def clustering_summary(
+    clusters: pd.DataFrame,
+    cluster_members: pd.DataFrame,
+    occupancy_cutoff: float,
+    match_radius: float,
+) -> dict[str, float | int | None]:
+    """Cohort-level headline metrics for one clustering result.
+
+    Reads a (clusters, cluster_members) pair — the artifacts of the clustering
+    stage — and returns a flat dict:
+
+      num_water               pooled water oxygens (every cluster_members row)
+      num_conserved_clusters  clusters with cluster_occupancy >= occupancy_cutoff
+      conserved_clusters_frac that count over the total number of clusters
+      conserved_water_frac    within-radius members of conserved clusters over all
+                              pooled waters — noise and radius-rejected waters are
+                              excluded from the numerator, not the denominator
+      knee_precision/recall/f1  the max-F1 per-structure point (the Pareto knee /
+                              p-r-panel star)
+
+    The consensus-dependent fields are None when there are no clusters, no pooled
+    waters, or no clusters clear occupancy_cutoff.
+    """
+    num_water = len(cluster_members)
+    n_clusters = len(clusters)
+    summary: dict[str, float | int | None] = {
+        "num_water": num_water,
+        "num_conserved_clusters": None,
+        "conserved_clusters_frac": None,
+        "conserved_water_frac": None,
+        "knee_precision": None,
+        "knee_recall": None,
+        "knee_f1": None,
+    }
+    if n_clusters == 0 or num_water == 0:
+        return summary
+
+    conserved_ids = clusters.loc[
+        clusters["cluster_occupancy"] >= occupancy_cutoff, "cluster_id"
+    ]
+    in_conserved = cluster_members["within_cutoff"] & cluster_members[
+        "cluster_id"
+    ].isin(set(conserved_ids))
+    summary["num_conserved_clusters"] = int(len(conserved_ids))
+    summary["conserved_clusters_frac"] = len(conserved_ids) / n_clusters
+    summary["conserved_water_frac"] = int(in_conserved.sum()) / num_water
+
+    centers = consensus_centers(clusters, occupancy_cutoff)
+    if len(centers):
+        pr_df = per_structure_consensus_pr(cluster_members, centers, match_radius)
+        knee = pr_df.loc[pr_df["f1"].idxmax()]
+        summary["knee_precision"] = float(knee["precision"])
+        summary["knee_recall"] = float(knee["recall"])
+        summary["knee_f1"] = float(knee["f1"])
+    return summary
+
+
 def per_structure_consensus_chamfer(
     cluster_members: pd.DataFrame,
     center_coords: np.ndarray,

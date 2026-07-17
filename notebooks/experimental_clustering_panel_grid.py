@@ -16,24 +16,17 @@ def _(mo):
     mo.md("""
     # experimental — clustering panel grid
 
-    A panel grid comparing clustering across filter variants of one cohort:
-    **one row per variant** (cohort + filter list set in the config cell), four
-    columns per row.
+    Compares clustering across filter variants of one cohort — **one row per
+    variant** (cohort + filter list set in the config cell). It produces two
+    views of the same data:
 
-    | col | plot | clustering |
-    |-----|------|------------|
-    | 1 | cluster-occupancy histogram + cumulative water% | fixed params |
-    | 2 | per-structure precision–recall + Pareto front | fixed params |
-    | 3–4 | same as 1–2 | per-cohort **best** params |
+    - a **summary table** — one row per variant, key metrics at the fixed
+      params (best-param values in parentheses where they differ);
+    - a **panel grid** — four plots per variant row (cluster-occupancy
+      histograms and per-structure precision–recall, at fixed and best params).
 
-    **Fixed** columns read the `min_cluster_size_<mcs>_min_samples_<ms>/`
-    subfolder (falling back to the cohort top-level when absent — correct only if
-    best == fixed). **Best** columns read the cohort top-level CSVs, using the
-    `recommended=True` row of `clustering_hyperparameters.csv`; when best == fixed
-    (typically the base cohort) they are redundant and left blank.
-
-    Plotting logic is ported from `01_cluster_analysis.py`. `num_water` (P/R
-    point color) comes from `cluster_members`, so no `metadata.csv` is needed.
+    Both read pre-computed `clusters.csv` / `cluster_members.csv`; no
+    `metadata.csv` is needed. See each section's own header below for details.
     """)
     return
 
@@ -51,6 +44,7 @@ def _():
 
     import config
     from cw.metrics import (
+        clustering_summary,
         consensus_centers,
         pareto_front,
         per_structure_consensus_pr,
@@ -59,6 +53,7 @@ def _():
 
     return (
         Path,
+        clustering_summary,
         config,
         consensus_centers,
         np,
@@ -87,7 +82,27 @@ def _(mo):
 
 
 @app.cell
-def _(Path, cohort_input, config, mo):
+def _(mo):
+    # Fixed clustering params + consensus cutoff as fill-in boxes, same rationale
+    # as the cohort box: marimo persists only the coded defaults below, so
+    # overriding any of them at runtime never shows up as a git diff.
+    fixed_mcs_input = mo.ui.text(value="15", label="fixed min_cluster_size")
+    fixed_ms_input = mo.ui.text(value="5", label="fixed min_samples")
+    cutoff_input = mo.ui.text(value="0.3", label="consensus cutoff")
+    mo.hstack([fixed_mcs_input, fixed_ms_input, cutoff_input], justify="start")
+    return cutoff_input, fixed_mcs_input, fixed_ms_input
+
+
+@app.cell
+def _(
+    Path,
+    cohort_input,
+    config,
+    cutoff_input,
+    fixed_mcs_input,
+    fixed_ms_input,
+    mo,
+):
     import re
 
     COHORT = cohort_input.value.strip()
@@ -95,6 +110,11 @@ def _(Path, cohort_input, config, mo):
         not COHORT,
         mo.md("**Enter a cohort in the box above to load its data** — "
               "e.g. `hewls_65` or `carbonicanhydrase_000562`."),
+    )
+    mo.stop(
+        not (fixed_mcs_input.value and fixed_ms_input.value and cutoff_input.value),
+        mo.md("**Set fixed min_cluster_size / min_samples / consensus cutoff "
+              "in the boxes above.**"),
     )
 
     # ══ USER CONFIG — everything you might tweak lives in this block ══════════════
@@ -113,19 +133,20 @@ def _(Path, cohort_input, config, mo):
         "bfactor_z1.0water",
         # "edia0.4_bfactor_z2.0water",
     ]
-    # Fixed clustering params shared across all rows (the left two columns), read
-    # from each cohort's "min_cluster_size_<mcs>_min_samples_<ms>" subfolder.
-    FIXED_MCS = 15
-    FIXED_MS = 5
-    CLUSTER_OCCUPANCY_CUTOFF = 0.3
     # ═════════════════════════════════════════════════════════════════════════════
+    # Fixed clustering params (the left two columns, read from each cohort's
+    # "min_cluster_size_<mcs>_min_samples_<ms>" subfolder) and the consensus
+    # cutoff come from the fill-in boxes above.
+    FIXED_MCS = int(fixed_mcs_input.value)
+    FIXED_MS = int(fixed_ms_input.value)
+    CLUSTER_OCCUPANCY_CUTOFF = float(cutoff_input.value)
 
     def _row_label(suffix):
         """Human label for a filter suffix: parse the known edia / bfactor_z
         tokens (any order/combination), falling back to the raw suffix for
         anything unrecognized so a new filter type still labels sensibly."""
         if suffix == "":
-            return f"{COHORT}\n(unfiltered)"
+            return "default"
         clauses = []
         edia = re.search(r"edia([\d.]+)", suffix)
         if edia:
@@ -153,6 +174,8 @@ def _(Path, cohort_input, config, mo):
         COHORT_ROWS,
         COL_HEADERS,
         DATA_DIR,
+        FIXED_MCS,
+        FIXED_MS,
         FIXED_SUBFOLDER,
         MATCH_RADIUS,
         PLOTS_DIR,
@@ -161,19 +184,10 @@ def _(Path, cohort_input, config, mo):
 
 
 @app.cell
-def _(
-    DATA_DIR,
-    FIXED_SUBFOLDER,
-    consensus_centers,
-    np,
-    pareto_front,
-    pd,
-    per_structure_consensus_pr,
-    plot_pr_scatter,
-    plt,
-    quantile_boundaries,
-):
-    # ── Panel helpers (ported from 01_cluster_analysis.py) ───────────────────────
+def _(DATA_DIR, FIXED_SUBFOLDER, pd):
+    # ── Cohort resolvers: locate each cohort's fixed / best clustering dirs and
+    # load the (clusters, cluster_members) pair. Shared by the summary table and
+    # the panel figure, so kept up top; the drawing helpers live by the figure.
 
     def parse_params(subfolder_name):
         """(min_cluster_size, min_samples) from a 'min_cluster_size_A_min_samples_B' name."""
@@ -211,6 +225,157 @@ def _(
             "fixed_params": fixed_params,
             "redundant": bp == fixed_params,
         }
+
+    return load_pair, resolve_cohort
+
+
+@app.cell
+def _(CLUSTER_OCCUPANCY_CUTOFF, FIXED_MCS, FIXED_MS, MATCH_RADIUS, mo):
+    mo.md(f"""
+    ## summary table
+
+    One row per filter variant, in the same order as the panel rows below
+    (unfiltered first, then each filter). Every column except `num_water` is
+    reported at the **fixed** params ({FIXED_MCS}/{FIXED_MS}); for filtered rows
+    whose best params differ, the **best**-param value follows in parentheses —
+    e.g. `0.88 (0.87)`. `num_water` is params-independent, so it carries no
+    parenthesized value.
+
+    - **num_water** — pooled water oxygens fed to clustering.
+    - **conserved_water%** — waters lying in a conserved cluster
+      (occupancy ≥ {CLUSTER_OCCUPANCY_CUTOFF}) **and** within the {MATCH_RADIUS} Å
+      membership radius, over all pooled waters. Noise and radius-rejected waters
+      are excluded from the numerator, not the denominator.
+    - **num_conserved_clusters / conserved_clusters%** — clusters with
+      occupancy ≥ {CLUSTER_OCCUPANCY_CUTOFF}: count, and fraction of all clusters.
+    - **Pareto knee precision/recall/F1** — the max-F1 per-structure point (the
+      star in the p/r panel).
+    """)
+    return
+
+
+@app.cell
+def _(
+    CLUSTER_OCCUPANCY_CUTOFF,
+    COHORT_ROWS,
+    MATCH_RADIUS,
+    ROW_LABELS,
+    clustering_summary,
+    load_pair,
+    pd,
+    resolve_cohort,
+):
+    # (metric key, column header, format). num_water is params-independent so it
+    # never carries a parenthesized best-param value; every other column does.
+    _FIELDS = [
+        ("num_water", "num_water", "int"),
+        ("conserved_water_frac", "conserved_water%", "pct"),
+        ("num_conserved_clusters", "num_conserved_clusters", "int"),
+        ("conserved_clusters_frac", "conserved_clusters%", "pct"),
+        ("knee_precision", "Pareto knee precision", "float"),
+        ("knee_recall", "Pareto knee recall", "float"),
+        ("knee_f1", "Pareto knee F1", "float"),
+    ]
+
+    def _fmt(value, kind):
+        if value is None:
+            return "—"
+        if kind == "int":
+            return f"{int(value):,}"
+        return f"{value:.1%}" if kind == "pct" else f"{value:.2f}"
+
+    def _cell(field, fixed, best, redundant, kind):
+        text = _fmt(fixed[field], kind)
+        if redundant or field == "num_water":
+            return text
+        return f"{text} ({_fmt(best[field], kind)})"
+
+    def _summary(directory):
+        return clustering_summary(
+            *load_pair(directory), CLUSTER_OCCUPANCY_CUTOFF, MATCH_RADIUS
+        )
+
+    _rows = []
+    for _cohort in COHORT_ROWS:
+        _info = resolve_cohort(_cohort)
+        _redundant = _info["redundant"]
+        _fixed = _summary(_info["fixed_dir"])
+        _best = _fixed if _redundant else _summary(_info["best_dir"])
+
+        _row = {"variant": ROW_LABELS.get(_cohort, _cohort).replace("\n", " ")}
+        for _field, _label, _kind in _FIELDS:
+            _row[_label] = _cell(_field, _fixed, _best, _redundant, _kind)
+        _fm, _fs = _info["fixed_params"]
+        if _redundant:
+            _row["Cluster hyperparameters"] = f"{_fm}/{_fs}"
+        else:
+            _bm, _bs = _info["best_params"]
+            _row["Cluster hyperparameters"] = f"{_fm}/{_fs} ({_bm}/{_bs})"
+        _rows.append(_row)
+
+    summary_table = pd.DataFrame(_rows).set_index("variant")
+    summary_table
+    return (summary_table,)
+
+
+@app.cell
+def _(PLOTS_DIR, mo):
+    table_save_path = mo.ui.text(
+        value=str(PLOTS_DIR / "clustering_summary_table.csv"),
+        label="table save path", full_width=True,
+    )
+    table_save_button = mo.ui.run_button(label="save table")
+    mo.hstack([table_save_path, table_save_button], justify="start")
+    return table_save_button, table_save_path
+
+
+@app.cell
+def _(Path, summary_table, table_save_button, table_save_path):
+    if table_save_button.value:
+        _out = Path(table_save_path.value)
+        _out.parent.mkdir(parents=True, exist_ok=True)
+        summary_table.to_csv(_out)
+        print(f"saved table to {_out}")
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## panel grid
+
+    Four columns per variant row:
+
+    | col | plot | clustering |
+    |-----|------|------------|
+    | 1 | cluster-occupancy histogram + cumulative water% | fixed params |
+    | 2 | per-structure precision–recall + Pareto front | fixed params |
+    | 3–4 | same as 1–2 | per-cohort **best** params |
+
+    **Fixed** columns read the `min_cluster_size_<mcs>_min_samples_<ms>/`
+    subfolder (falling back to the cohort top-level when absent — correct only if
+    best == fixed). **Best** columns read the cohort top-level CSVs, using the
+    `recommended=True` row of `clustering_hyperparameters.csv`; when best == fixed
+    (typically the base cohort) they are redundant and left blank.
+
+    Plotting logic is ported from `01_cluster_analysis.py`. `num_water` (P/R
+    point color) comes from `cluster_members`, so no `metadata.csv` is needed.
+    """)
+    return
+
+
+@app.cell
+def _(
+    consensus_centers,
+    np,
+    pareto_front,
+    pd,
+    per_structure_consensus_pr,
+    plot_pr_scatter,
+    plt,
+    quantile_boundaries,
+):
+    # ── Panel drawing helpers (ported from 01_cluster_analysis.py) ───────────────
 
     def draw_cumulative_hist(
         fig, subspec, clusters, cluster_members, cutoff,
@@ -342,7 +507,7 @@ def _(
         ax.set_xlim(0, 1.02)
         ax.set_ylim(0, 1.02)
 
-    return draw_cumulative_hist, draw_pr_panel, load_pair, resolve_cohort
+    return draw_cumulative_hist, draw_pr_panel
 
 
 @app.cell
