@@ -21,6 +21,32 @@ def quantile_boundaries(values, n_bins, quantile_range=(0.01, 0.99)):
     return edges
 
 
+def noise_stats(cluster_members):
+    """(n_structures, noise_occupancy, noise_count) for a cluster_members table.
+    noise_occupancy is the occupancy a single-structure water would carry
+    (1 / n_structures); noise_count is the number of unclustered (cluster_id ==
+    -1) waters. Used to place the noise pile in occupancy histograms."""
+    n_structures = cluster_members["pdb_id"].nunique()
+    noise_occupancy = 1.0 / n_structures if n_structures else 0.0
+    noise_count = int((cluster_members["cluster_id"] == -1).sum())
+    return n_structures, noise_occupancy, noise_count
+
+
+def broken_y_axis(ax_top, ax_bot, *, d=0.015):
+    """Turn two vertically stacked axes into a broken y-axis: hide the facing
+    spines/ticks and draw the four diagonal break marks across the gap. Assumes
+    ax_top sits above ax_bot and both share the x-axis."""
+    ax_top.spines["bottom"].set_visible(False)
+    ax_bot.spines["top"].set_visible(False)
+    ax_top.tick_params(bottom=False)
+    break_kw = dict(color="k", clip_on=False, linewidth=1, transform=ax_top.transAxes)
+    ax_top.plot((-d, +d), (-d, +d), **break_kw)
+    ax_top.plot((1 - d, 1 + d), (-d, +d), **break_kw)
+    break_kw["transform"] = ax_bot.transAxes
+    ax_bot.plot((-d, +d), (1 - d, 1 + d), **break_kw)
+    ax_bot.plot((1 - d, 1 + d), (1 - d, 1 + d), **break_kw)
+
+
 def plot_pr_scatter(
     pr_df: pd.DataFrame,
     *,
