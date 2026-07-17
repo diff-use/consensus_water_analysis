@@ -72,11 +72,32 @@ def _():
 
 
 @app.cell
-def _(Path, config):
+def _(mo):
+    # Cohort is a fill-in box, not a file constant, so switching cohorts is a
+    # runtime action that never shows up as a git diff (marimo persists the empty
+    # default `value=""`, not what you type here).
+    cohort_input = mo.ui.text(
+        value="",
+        placeholder="e.g. hewls_65 or carbonicanhydrase_000562",
+        label="cohort",
+        full_width=True,
+    )
+    cohort_input
+    return (cohort_input,)
+
+
+@app.cell
+def _(Path, cohort_input, config, mo):
     import re
 
+    COHORT = cohort_input.value.strip()
+    mo.stop(
+        not COHORT,
+        mo.md("**Enter a cohort in the box above to load its data** — "
+              "e.g. `hewls_65` or `carbonicanhydrase_000562`."),
+    )
+
     # ══ USER CONFIG — everything you might tweak lives in this block ══════════════
-    COHORT = "carbonicanhydrase_000562_iso"
     # One row per filter subset, top → bottom. "" is the unfiltered base cohort;
     # every other entry is the folder suffix appended to COHORT (e.g. "edia0.4" →
     # "<COHORT>_edia0.4"). The figure sizes itself to len(FILTER_SUBSETS), so add
@@ -85,8 +106,12 @@ def _(Path, config):
     FILTER_SUBSETS = [
         "",
         "edia0.4",
+        "edia0.6",
+        "edia0.8",
         "bfactor_z2.0water",
-        "edia0.4_bfactor_z2.0water",
+        "bfactor_z1.5water",
+        "bfactor_z1.0water",
+        # "edia0.4_bfactor_z2.0water",
     ]
     # Fixed clustering params shared across all rows (the left two columns), read
     # from each cohort's "min_cluster_size_<mcs>_min_samples_<ms>" subfolder.

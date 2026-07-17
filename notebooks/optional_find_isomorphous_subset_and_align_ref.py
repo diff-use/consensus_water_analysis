@@ -240,7 +240,7 @@ def _(in_sg, mo):
         )
         if c in _iso.columns and _iso[c].notna().any()
     ]
-    _ranges = "\n".join(f"- `{c}`: {_iso[c].min():.3g} – {_iso[c].max():.3g}" for c in _numeric)
+    _ranges = "\n".join(f"- `{c}`: {_iso[c].min():.3g} – {_iso[c].max():.3g}: median {_iso[c].median():.3g}" for c in _numeric)
     extra_query_input = mo.ui.text(
         value="",
         placeholder="resolution <= 2.0 and deposited_r_free <= 0.2",
