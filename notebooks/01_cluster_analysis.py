@@ -75,8 +75,8 @@ def _(mo):
     # runtime action that never shows up as a git diff (marimo persists the empty
     # default `value=""`, not what you type here).
     cohort_input = mo.ui.text(
-        value="",
-        placeholder="e.g. hewls_65 or carbonicanhydrase_000562",
+        value="hewls_65",
+        placeholder="e.g. hewls_65 or carbonicanhydrase_000562 or endothiapepsin_000240",
         label="cohort",
         full_width=True,
     )
@@ -107,6 +107,8 @@ def _(Path, cohort_input, config, mo, pd):
     SUBSET = Path(config.DATA_DIR) / (COHORT + subset_suffix) #/ "min_cluster_size_5_min_samples_5"
     if not SUBSET.exists():
         SUBSET = DATA
+    else: 
+        COHORT += subset_suffix
 
     _suffix = f"_{MEMBER_RADIUS}" if MEMBER_RADIUS is not None else ""
     clusters = pd.read_csv(SUBSET / f"clusters{_suffix}.csv")
@@ -150,10 +152,11 @@ def _(mo):
     axis is **broken** — the top panel zooms the noise pile, the bottom panel
     the cluster-count detail — because noise dwarfs the per-bin cluster counts.
     The long tail of tiny low-occupancy clusters dominates, which is what makes
-    non-consensus look prevalent. The maroon line (left axis) is member-weighted:
-    cumulative fraction of all *waters* at occupancy ≤ x (noise included). It
-    climbs slowly at low occupancy, showing those many small clusters actually
-    hold only a minority of waters.
+    non-consensus look prevalent. The black line (right axis) is member-weighted:
+    the reverse-cumulative fraction of all *waters* at occupancy ≥ x (noise
+    included). It starts at 100% and falls as the score rises, so its height at
+    the cutoff is the consensus water fraction — showing those many small
+    low-occupancy clusters actually hold only a minority of waters.
     """)
     return
 
@@ -219,17 +222,26 @@ def _(
         # left axis: raw number of clusters per occupancy bin
         _cluster_hist, _ = np.histogram(clusters["cluster_occupancy"], bins=_edges)
 
-        # right axis: cumulative fraction of waters (member-weighted, incl. noise)
         _water_per_bin, _ = np.histogram(_occ["cluster_occupancy"], bins=_edges, weights=_occ["n_members"])
         _noise_per_bin, _ = np.histogram([_noise_occ], bins=_edges, weights=[_noise_n])
-        _water_counts = _water_per_bin + _noise_per_bin
 
-        _total = _water_counts.sum()
-        _cum_frac = _water_counts.cumsum() / _total
-        # noise sits below the cutoff, so the cumulative fraction at the cutoff is
-        # exactly the complement of the consensus (>= cutoff) water fraction.
-        _frac = _occ.loc[_occ["cluster_occupancy"] >= cluster_occupancy_cutoff, "n_members"].sum() / _total
-        _cum_at_cutoff = 1 - _frac
+        # right axis: reverse cumulative over ALL waters — 100% at low score,
+        # falling as the score rises. Denominator is every water oxygen
+        # (len(cluster_members)); above the noise bin the curve counts only
+        # clustered waters within the radius cutoff (n_members), so every
+        # non-clustered water (HDBSCAN noise AND radius-rejected members) is
+        # lumped into the lowest bin, where it only sets the 100% start and never
+        # contributes at higher scores.
+        _n_total = len(cluster_members)
+        _n_clustered = int(cluster_members["within_cutoff"].sum())
+        _rev_counts = _water_per_bin.astype(float).copy()
+        _rev_counts[0] += _n_total - _n_clustered
+        _cum_reverse = _rev_counts[::-1].cumsum()[::-1] / _n_total
+        # dashed marker: clustered within-cutoff waters at or above the consensus
+        # cutoff, over all waters — matches the curve's value at the cutoff.
+        _frac_ge_cutoff = (
+            _occ.loc[_occ["cluster_occupancy"] >= cluster_occupancy_cutoff, "n_members"].sum() / _n_total
+        )
 
         _cluster_max = int(_cluster_hist.max())
         _noise_bin = int(_noise_per_bin.argmax())
@@ -237,47 +249,63 @@ def _(
 
         # Broken #clusters axis (right): a small top panel zooms the noise pile,
         # the larger bottom panel shows the cluster-count detail. A full-height
-        # overlay carries the cumulative water line (left) so its 100% ceiling
-        # lines up with the top of the noise pile.
+        # overlay carries the reverse-cumulative water line (right) so its 100%
+        # ceiling lines up with the top of the noise pile.
         _fig, (_ax_top, _ax_bot) = plt.subplots(
-            2, 1, sharex=True, figsize=(3.5, 3),
-            gridspec_kw={"height_ratios": [1, 3], "hspace": 0.05},
+            2, 1, sharex=True, figsize=(3.3, 3),
+            gridspec_kw={"height_ratios": [1, 3], "hspace": 0.1},
         )
-        _fig.subplots_adjust(left=0.17, right=0.83, bottom=0.2, top=0.95)
+        _fig.subplots_adjust(left=0.17, right=0.83, bottom=0.2, top=0.9)
 
         for _axis in (_ax_top, _ax_bot):
             _axis.bar(_centers, _cluster_hist, width=_width, color="gray", alpha=0.5)
             _axis.bar(_centers, _noise_per_bin, width=_width, bottom=_cluster_hist,
                       color="lightgrey", alpha=0.7)
             _axis.tick_params(axis="y", colors="gray", labelsize=_tick_font_size)
+            # the right spine is carried by the full-height cumulative overlay
+            # below; hiding it here removes the hspace gap between the two panels
+            _axis.spines["right"].set_visible(False)
 
         # top panel ends exactly at the noise-pile top so the curve's 100% meets it
         _ax_top.set_ylim(_noise_top * 0.85, _noise_top)
         _ax_bot.set_ylim(0, _cluster_max * 1.25)
+        # the bottom panel is 3x taller (height_ratios [1, 3]) but the default
+        # tick locator gives it a similar tick count to the top, so its ticks look
+        # sparse — bump its tick count to match the top panel's visual density.
+        _ax_bot.locator_params(axis="y", nbins=8)
         _ax_bot.set_ylabel("#cluster sites", fontsize=_fs, color="gray")
         _ax_bot.set_xlabel(f"{cluster_occupancy_label}", fontsize=_fs)
         _ax_bot.tick_params(axis="x", labelsize=_tick_font_size)
 
-        # diagonal break marks between the two panels
-        broken_y_axis(_ax_top, _ax_bot)
+        # diagonal break marks between the two panels — left side only, so the
+        # cumulative water% axis on the right stays continuous (unbroken)
+        broken_y_axis(_ax_top, _ax_bot, right=False, d=0.025, linewidth=1.5, color="gray")
 
-        # full-height overlay for the cumulative water fraction, foregrounded on
-        # the left; spans both panels so 100% sits at the noise-pile ceiling
+        # full-height overlay for the reverse-cumulative water fraction,
+        # foregrounded; spans both panels so 100% sits at the noise-pile ceiling
         _pt = _ax_top.get_position()
         _pb = _ax_bot.get_position()
         _ax_cum = _fig.add_axes([_pb.x0, _pb.y0, _pb.width, _pt.y1 - _pb.y0])
         _ax_cum.set_xlim(_ax_bot.get_xlim())
-        _ax_cum.set_ylim(0, _cum_frac.max())
-        _ax_cum.plot(_centers, _cum_frac, color="k", lw=2.5, label="waters")
-        _ax_cum.set_ylabel("cumulative water%", fontsize=_fs, color="k")
+        _ax_cum.set_ylim(0, 1)
+        _ax_cum.plot(_centers, _cum_reverse, color="k", lw=2.5)
+        _ax_cum.set_ylabel("water% above score", fontsize=_fs, color="k")
+        _ax_cum.set_yticks(np.linspace(0, 1, 6))
+        _ax_cum.set_yticklabels([f"{int(_t * 100)}" for _t in np.linspace(0, 1, 6)])
         _ax_cum.tick_params(axis="y", colors="k", labelsize=_tick_font_size)
-        _ax_cum.axvline(cluster_occupancy_cutoff, color="C0", linestyle="--", linewidth=1)
-        _ax_cum.axhline(_cum_at_cutoff, color="k", linestyle="--", linewidth=1)
+        # dashed guides meeting at the curve point (cutoff, frac_ge_cutoff): the
+        # vertical drops from the curve down to the x-axis, the horizontal runs
+        # from the curve out to the right y-axis where the value is read.
+        _x_right = _ax_cum.get_xlim()[1]
+        _ax_cum.plot([cluster_occupancy_cutoff, cluster_occupancy_cutoff], [0, _frac_ge_cutoff],
+                     color="C0", linestyle="--", linewidth=1)
+        _ax_cum.plot([cluster_occupancy_cutoff, _x_right], [_frac_ge_cutoff, _frac_ge_cutoff],
+                     color="k", linestyle="--", linewidth=1)
         _ax_cum.patch.set_visible(False)
         _ax_cum.xaxis.set_visible(False)
         _ax_cum.yaxis.tick_right()
         _ax_cum.yaxis.set_label_position("right")
-        for _s in ("top", "right", "bottom"):
+        for _s in ("top", "left", "bottom"):
             _ax_cum.spines[_s].set_visible(False)
 
     if water_occ_save_button.value:
@@ -410,8 +438,9 @@ def _(mo):
 
 @app.cell
 def _(PLOTS_DIR, mo, pairplot_metrics):
+    _default_refs = {"b_factor_zscore": "1.0, 1.5, 2.0", "edia": "0.4, 0.6, 0.8"}
     occ_metric_refs = mo.ui.dictionary({
-        _m: mo.ui.text(value="", label=f"{_m} reference values", full_width=True)
+        _m: mo.ui.text(value=_default_refs.get(_m, ""), label=f"{_m} reference values", full_width=True)
         for _m in pairplot_metrics.value
     })
     water_metric_gridsize = mo.ui.slider(
@@ -422,8 +451,9 @@ def _(PLOTS_DIR, mo, pairplot_metrics):
     water_metric_font_size = mo.ui.slider(
         start=6, stop=24, step=1, value=14, label="font size", show_value=True,
     )
+    _metric_slug = pairplot_metrics.value[0] if len(pairplot_metrics.value) == 1 else "metrics"
     water_metric_save_path = mo.ui.text(
-        value=str(PLOTS_DIR / "occupancy_vs_metrics_allwaters.png"),
+        value=str(PLOTS_DIR / f"occupancy_vs_{_metric_slug}_allwaters.png"),
         label="save path", full_width=True,
     )
     water_metric_save_dpi = mo.ui.number(start=72, stop=1200, step=1, value=300, label="dpi")
@@ -465,6 +495,9 @@ def _(
     water_metric_save_path,
 ):
     _metrics = list(pairplot_metrics.value)
+    metric2label = {_m: _m for _m in _metrics}
+    metric2label["edia"] = "EDIA"
+    metric2label["b_factor_zscore"] = "B-factor z-score"
     _fs = water_metric_font_size.value
     _waters = (
         cluster_members[cluster_members["within_cutoff"]]
@@ -472,7 +505,7 @@ def _(
     )
 
     _n = max(len(_metrics), 1)
-    _fig, _axes = plt.subplots(1, _n, figsize=(3.85 * _n, 3), squeeze=False, constrained_layout=True)
+    _fig, _axes = plt.subplots(1, _n, figsize=(4 * _n, 3), squeeze=False, constrained_layout=True)
     _axes = _axes[0]
 
     # First pass: draw every hexbin (clamping the y-axis to the 1–99 percentile
@@ -489,14 +522,23 @@ def _(
             _sub["cluster_occupancy"], _sub[_metric],
             gridsize=int(water_metric_gridsize.value),
             mincnt=1, cmap="viridis",
+            alpha=0.75
         )
         _hexbins.append(_hb)
         if _hb.get_array().size:
             _vmax = max(_vmax, float(_hb.get_array().max()))
 
         _ax.set_xlabel(f"{cluster_occupancy_label}", fontsize=_fs)
-        _ax.set_ylabel(_metric, fontsize=_fs)
+        _ax.set_ylabel(metric2label[_metric], fontsize=_fs)
         _ax.tick_params(labelsize=_fs)
+
+        _yticks = {
+            "b_factor_zscore": [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0],
+            "edia": [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        }.get(_metric)
+        if _yticks is not None:
+            _ax.set_yticks(_yticks)
+            _ax.set_yticklabels([f"{_t:.1f}" for _t in _yticks])
 
         _refs = []
         for _tok in occ_metric_refs.value.get(_metric, "").replace(",", " ").split():
@@ -505,13 +547,14 @@ def _(
             except ValueError:
                 pass
         for _rv in _refs:
-            _ax.axhline(_rv, color="k", linestyle="--", linewidth=1)
+            # _ax.axhline(_rv, color="r", linestyle="-", linewidth=3)
+            _ax.axhline(_rv, color="k", linestyle="--", linewidth=3)
 
     # Shared normalization across panels, then a single colorbar for the figure.
     _norm = LogNorm(vmin=1, vmax=_vmax) if water_metric_log.value else Normalize(vmin=0, vmax=_vmax)
     for _hb in _hexbins:
         _hb.set_norm(_norm)
-    _cb = _fig.colorbar(_hexbins[-1], ax=list(_axes))
+    _cb = _fig.colorbar(_hexbins[-1], ax=list(_axes), pad=0.005)
     _cb.set_label("count", fontsize=_fs)
     _cb.ax.tick_params(labelsize=_fs)
 
@@ -693,11 +736,13 @@ def _(
         fontsize=font_size.value, marker_size=30
         # title=f"cluster occupancy cutoff = {cluster_occupancy_cutoff}",
     )
-    _ax.scatter([_knee["recall"]], [_knee["precision"]], marker="*", s=200,
-                facecolors="none", edgecolors="r", zorder=5, label="max F1")
-    _ax.plot(_front["recall"], _front["precision"], color="r", lw=1.5, label="Pareto front")
-    _ax.plot(_curve["recall"], _curve["precision"], color="r", marker="o", ls='--',
-             ms=2, lw=1.2, label="average")
+    _ax.scatter([_knee["recall"]], [_knee["precision"]], marker="*", s=350,
+                facecolors="r", edgecolors="white", lw=1,
+                zorder=5, label="max F1")
+    # _ax.plot(_front["recall"], _front["precision"], color="white", lw=2, label="Pareto front")
+    _ax.plot(_front["recall"], _front["precision"], color="red", ls='-', lw=3, label="Pareto front")
+    # _ax.plot(_curve["recall"], _curve["precision"], color="r", marker="o", ls='--',
+    #          ms=2, lw=1.2, label="average")
 
     _ax.set_xticks(_ax.get_yticks())
     _ax.set_xlim(tuple(axis_range.value))
@@ -726,6 +771,11 @@ def _(
         print(f"saved to {_out}")
 
     _fig
+    return
+
+
+@app.cell
+def _():
     return
 
 

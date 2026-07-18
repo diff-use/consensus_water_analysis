@@ -32,19 +32,26 @@ def noise_stats(cluster_members):
     return n_structures, noise_occupancy, noise_count
 
 
-def broken_y_axis(ax_top, ax_bot, *, d=0.015):
+def broken_y_axis(ax_top, ax_bot, *, d=0.015, left=True, right=True, linewidth=1, color="k"):
     """Turn two vertically stacked axes into a broken y-axis: hide the facing
-    spines/ticks and draw the four diagonal break marks across the gap. Assumes
-    ax_top sits above ax_bot and both share the x-axis."""
+    spines/ticks and draw the diagonal break marks across the gap. Assumes
+    ax_top sits above ax_bot and both share the x-axis. left/right select which
+    corners get break marks — set right=False when a continuous overlay axis
+    (e.g. a cumulative curve) sits on the right and must not look broken.
+    linewidth and color set the thickness and color of the diagonal break marks."""
     ax_top.spines["bottom"].set_visible(False)
     ax_bot.spines["top"].set_visible(False)
     ax_top.tick_params(bottom=False)
-    break_kw = dict(color="k", clip_on=False, linewidth=1, transform=ax_top.transAxes)
-    ax_top.plot((-d, +d), (-d, +d), **break_kw)
-    ax_top.plot((1 - d, 1 + d), (-d, +d), **break_kw)
+    break_kw = dict(color=color, clip_on=False, linewidth=linewidth, transform=ax_top.transAxes)
+    if left:
+        ax_top.plot((-d, +d), (-d, +d), **break_kw)
+    if right:
+        ax_top.plot((1 - d, 1 + d), (-d, +d), **break_kw)
     break_kw["transform"] = ax_bot.transAxes
-    ax_bot.plot((-d, +d), (1 - d, 1 + d), **break_kw)
-    ax_bot.plot((1 - d, 1 + d), (1 - d, 1 + d), **break_kw)
+    if left:
+        ax_bot.plot((-d, +d), (1 - d, 1 + d), **break_kw)
+    if right:
+        ax_bot.plot((1 - d, 1 + d), (1 - d, 1 + d), **break_kw)
 
 
 def plot_pr_scatter(
@@ -125,9 +132,9 @@ def plot_pr_scatter(
     if sc is not None and color_values is not None:
         cbar = (
             fig.colorbar(sc, ax=ax, extend="both", spacing="uniform",
-                         ticks=boundaries, format="%.3g")
+                         ticks=boundaries, format="%.3g", pad=0.02)
             if boundaries is not None
-            else fig.colorbar(sc, ax=ax)
+            else fig.colorbar(sc, ax=ax, pad=0.02)
         )
         if color_label:
             cbar.set_label(color_label, fontsize=fontsize)
