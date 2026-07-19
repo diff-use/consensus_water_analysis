@@ -129,7 +129,7 @@ def load_edia(json_path: Path) -> dict[tuple[str, int, str], float] | None:
             int(pdb_info.get("seqNum", 0)),
             normalize_ins_code(pdb_info.get("insCode", "")),
         )
-        lookup[key] = float(entry.get("EDIAm", 0.0))
+        lookup[key] = float(entry.get("EDIAm", np.nan))
     return lookup
 
 
@@ -159,7 +159,7 @@ def load_edia_all_altlocs(json_path: Path) -> dict[tuple[str, int, str], list[fl
             int(pdb_info.get("seqNum", 0)),
             normalize_ins_code(pdb_info.get("insCode", "")),
         )
-        scores.setdefault(key, []).append(float(entry.get("EDIAm", 0.0)))
+        scores.setdefault(key, []).append(float(entry.get("EDIAm", np.nan)))
     return scores
 
 
