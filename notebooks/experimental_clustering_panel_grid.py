@@ -73,7 +73,7 @@ def _(mo):
     # default `value=""`, not what you type here).
     cohort_input = mo.ui.text(
         value="",
-        placeholder="e.g. hewls_65 or carbonicanhydrase_000562",
+        placeholder="e.g. hewls_65 or carbonicanhydrase_000562_iso or endothiapepsin_000240_iso",
         label="cohort",
         full_width=True,
     )
@@ -82,14 +82,48 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
-    # Fixed clustering params + consensus cutoff as fill-in boxes, same rationale
-    # as the cohort box: marimo persists only the coded defaults below, so
-    # overriding any of them at runtime never shows up as a git diff.
-    fixed_mcs_input = mo.ui.text(value="15", label="fixed min_cluster_size")
-    fixed_ms_input = mo.ui.text(value="5", label="fixed min_samples")
+def _(Path, cohort_input, config, pd):
+    # Auto-infer the fixed baseline params from the base (unfiltered) cohort's
+    # grid search: the recommended row of its clustering_hyperparameters.csv.
+    # Returns None when the cohort box is empty or the file is absent, in which
+    # case the boxes below fall back to the hand-set 15 / 5 default.
+    def _recommended_params(cohort_dir):
+        hyperparameters_path = cohort_dir / "clustering_hyperparameters.csv"
+        if not hyperparameters_path.exists():
+            return None
+        hyperparameters = pd.read_csv(hyperparameters_path)
+        recommended = hyperparameters[hyperparameters["recommended"]].iloc[0]
+        return int(recommended["min_cluster_size"]), int(recommended["min_samples"])
+
+    _cohort = cohort_input.value.strip()
+    recommended_params = (
+        _recommended_params(Path(config.DATA_DIR) / _cohort) if _cohort else None
+    )
+    return (recommended_params,)
+
+
+@app.cell
+def _(cohort_input, mo, recommended_params):
+    # Fixed clustering params + consensus cutoff. min_cluster_size / min_samples
+    # default to the base cohort's recommended grid-search params (auto-filled
+    # once you enter the cohort); edit either box to pin a different fixed
+    # baseline. The per-filter "best" columns are independent of these — each
+    # still comes from its own subset's clustering_hyperparameters.csv.
+    _mcs_default, _ms_default = recommended_params or (15, 5)
+    fixed_mcs_input = mo.ui.text(value=str(_mcs_default), label="fixed min_cluster_size")
+    fixed_ms_input = mo.ui.text(value=str(_ms_default), label="fixed min_samples")
     cutoff_input = mo.ui.text(value="0.3", label="consensus cutoff")
-    mo.hstack([fixed_mcs_input, fixed_ms_input, cutoff_input], justify="start")
+    _source = (
+        "auto-filled from the base cohort's `clustering_hyperparameters.csv` "
+        "(recommended row)"
+        if recommended_params
+        else f"no `clustering_hyperparameters.csv` for "
+        f"`{cohort_input.value.strip() or '—'}` — using fallback **15 / 5**"
+    )
+    mo.vstack([
+        mo.hstack([fixed_mcs_input, fixed_ms_input, cutoff_input], justify="start"),
+        mo.md(f"*fixed min_cluster_size / min_samples {_source}.*"),
+    ])
     return cutoff_input, fixed_mcs_input, fixed_ms_input
 
 
