@@ -1,53 +1,42 @@
 """Pairwise water-set agreement metrics between aligned structures.
 
-Every mode aligns a mobile/predictor structure onto a reference (Cα Kabsch) and
-compares their water oxygens, reporting precision/recall/f1 (many-to-one), matched
-precision/recall (one-to-one) and chamfer distance; cohort and self-refined output
-additionally carry rmsd_after + max_cell_diff. The cutoff is applied uniformly, so it
-lives in the filename rather than a column; a failed alignment leaves NaN.
+Every mode Cα-aligns a mobile/predictor structure onto a reference (Kabsch) and compares their
+water oxygens: precision/recall/f1 (many-to-one), matched precision/recall (one-to-one) and
+chamfer distance. The cutoff is uniform, so it lives in the filename, not a column; a failed
+alignment leaves NaN. Raw phenix waters (phenix / self-refined / partition modes) are
+symmetry-aware distance-filtered to within --filter-cutoff Å of protein before comparison —
+matching the deposited references — unless --no-filter; cohort mode reads already-filtered CIFs.
 
-Raw phenix waters (phenix / self-refined modes) are symmetry-aware distance-filtered to
-within --filter-cutoff Å of protein before comparison — matching the deposited
-references — unless --no-filter is passed. Cohort mode reads already-filtered CIFs.
+Four modes (purpose · command · where the output is viewed):
 
-Usage:
-    # cohort mode — every ordered pair of cohort members
-    uv run scripts/pairwise_water_metrics.py <cohort.txt> [--input-dir <dir>]
-                                             [--cutoff <Å>] [-o <csv>]
+  cohort — every ordered pair of a cohort's filtered CIFs (deposited-vs-deposited), for
+    cohort-homogeneity / reference-pick diagnostics.
+      pairwise_water_metrics.py <cohort.txt> [--input-dir DIR] [--cutoff Å] [-o CSV]
+      → data/<cohort>/pairwise_metrics_<cutoff>.csv, viewed in
+        notebooks/optional_find_isomorphous_subset_and_align_ref.py, Part 2 (§5–§7);
+        with -o .../reference_pairwise_metrics_<cutoff>.csv it is the deposited baseline in
+        notebooks/02_refinement_water_heatmaps.py (Summary + Section B).
 
-    # self-refined mode — re-refined reference (self-refined diagonal pairs)
-    uv run scripts/pairwise_water_metrics.py --self-refined --results-dir <dir>
-                                             [--variant V] [--cutoff <Å>] [--no-filter] [-o <csv>]
+  --self-refined — pairwise metrics among the self-refined diagonal CIFs
+    (<X>_refined_by_<X>_<V>), a re-refined-reference baseline.
+      pairwise_water_metrics.py --self-refined --results-dir DIR [--variant V] [--no-filter] [-o CSV]
+      → <results-dir parent>/self_refined_pairwise_metrics_<V>_<cutoff>.csv, viewed in
+        notebooks/02_refinement_water_heatmaps.py (Section B).
 
-    # phenix mode — each reference vs its cross-refinement predictors
-    uv run scripts/pairwise_water_metrics.py --phenix --results-dir <dir>
-                                             (--ref-dir <dir> | --ref-from-self-refined)
-                                             [--variant V] [--cutoff <Å>] [--no-filter] [-o <csv>]
+  --phenix — each reference vs its cross-refinement predictors (<b>_refined_by_<a>_<V>),
+    grounded on deposited waters or, with --ref-from-self-refined, on <a>_refined_by_<a>.
+      pairwise_water_metrics.py --phenix --results-dir DIR (--ref-dir DIR | --ref-from-self-refined) [--variant V] [--no-filter] [-o CSV]
+      → <results-dir parent>/phenix_pairwise_metrics[_selfref]_<V>_<cutoff>.csv, viewed in
+        notebooks/02_refinement_water_heatmaps.py (Section B).
 
-COHORT MODE — for every ordered pair (a, b) of cohort members, b is aligned onto a;
-a is the reference / ground truth, b the predicted set.
-    Input  (required): <cohort.txt>  — one PDB id per line.
-    Input  (CIFs):     --input-dir/<id>.cif   [default: data/<cohort_id>/filtered_pdbs/]
-    Output:            -o <csv>               [default: data/<cohort_id>/pairwise_metrics_<cutoff>.csv]
+  --partition — starting-model-bias decomposition: per off-diagonal pair, the cross-refinement's
+    recall of the shared / b_only / a_only / c_only water groups (see run_partition).
+      pairwise_water_metrics.py --partition --results-dir DIR [--variant V] [--no-filter]
+      → <results-dir parent>/starting_model_partition_<V>_<cutoff>.csv, viewed in
+        experiments/starting_model_partition_recall.py (gitignored, local-only).
 
-SELF-REFINED MODE — a re-refined alternative to the cohort reference. For variant V and
-ordered pair (a, b): reference <a>_refined_by_<a>_<V>, predictor <b>_refined_by_<b>_<V>
-(both refined against their own model). Same columns as cohort mode.
-    Input  (required): --results-dir <dir>  — a phenix refinement_results/ tree.
-    Output:            <results-dir parent>/self_refined_pairwise_metrics_<V>_<cutoff>.csv
-                       (one per variant; -o overrides only with a single --variant)
-
-PHENIX MODE — for variant V and entry (reference a, predictor b), the predictor is
-<b>_refined_by_<a>_<V>. The reference (ground truth) is a's deposited waters, or — with
---ref-from-self-refined — a's self-refinement <a>_refined_by_<a>_<V>, which keeps the
-section-B re-refined Δ clean (ground truth fixed).
-    Input  (predictors, required): --results-dir <dir>  (nested refinement_results tree;
-                                   raw CIFs cleaned + distance-filtered on the fly)
-    Input  (reference, required):  --ref-dir <dir>  → deposited <dir>/<a>.cif
-                                   (e.g. data/<cohort>/filtered_pdbs/);
-                                   omit ONLY with --ref-from-self-refined.
-    Output:            <results-dir parent>/phenix_pairwise_metrics[_selfref]_<V>_<cutoff>.csv
-                       (one per variant; -o overrides only with a single --variant)
+Output paths: -o overrides only with a single --variant. Column schemas: FIELDNAMES
+(cohort / self-refined), PHENIX_FIELDNAMES, PARTITION_FIELDNAMES.
 """
 
 import argparse
@@ -61,6 +50,7 @@ import biotite.structure.io.pdbx as pdbx
 import gemmi
 import numpy as np
 from loguru import logger
+from scipy.spatial import cKDTree
 
 import config
 from cw.align import align_to_reference
@@ -96,6 +86,22 @@ PHENIX_FIELDNAMES = [
     *[k for k in METRIC_FIELDS if k != "rmsd_after"],
 ]
 VARIANTS = ["auto", "fixed", "stripped"]
+PARTITION_FIELDNAMES = [
+    "reference",
+    "donor",
+    "n_shared",
+    "n_b_only",
+    "n_a_only",
+    "n_c_only",
+    "recall_shared",
+    "recall_b_only",
+    "recall_a_only",
+    "recall_c_only",
+    "n_pred",
+    "n_pred_b",
+    "n_pred_a_only",
+    "n_pred_orphan",
+]
 
 
 def clean_phenix_waters(raw_path, pdb_id, *, distance_filter, filter_cutoff):
@@ -414,6 +420,164 @@ def run_phenix(args) -> None:
         _write_csv(out_path, PHENIX_FIELDNAMES, rows)
 
 
+def _within_cutoff_mask(points: np.ndarray, others: np.ndarray, cutoff: float) -> np.ndarray:
+    """Boolean per point in `points`: is any point in `others` within cutoff?"""
+    if len(points) == 0:
+        return np.zeros(0, dtype=bool)
+    if len(others) == 0:
+        return np.zeros(len(points), dtype=bool)
+    distances, _ = cKDTree(others).query(points, distance_upper_bound=cutoff)
+    return np.isfinite(distances)
+
+
+def _group_recall(group_coords: np.ndarray, predictor_coords: np.ndarray, cutoff: float) -> tuple[float, int]:
+    """Fraction of `group_coords` with a `predictor_coords` point within cutoff, and the group size.
+
+    NaN recall when the group is empty (undefined); 0.0 when the group is non-empty but the
+    predictor set is.
+    """
+    n = len(group_coords)
+    if n == 0:
+        return float("nan"), 0
+    return float(_within_cutoff_mask(group_coords, predictor_coords, cutoff).sum()) / n, n
+
+
+def run_partition(args) -> None:
+    """Starting-model-bias decomposition. For each ordered off-diagonal pair (A = starting
+    model, B = data donor, A != B), the cross-refinement <B>_refined_by_<A> is the predictor;
+    self-refinements <B>_refined_by_<B> and <A>_refined_by_<A> are the ground truth. Everything
+    is Cα-aligned into B's frame, then B's reference union is split into disjoint groups and the
+    fraction of each the predictor recovers within the cutoff (recall) is reported:
+        shared  — B's waters that also sit on A   (conserved; recall ~ ceiling)
+        b_only  — B's waters absent from A        (B's data supports; high recall = data wins)
+        a_only  — A's waters absent from B        (template-only; recall here = bias signal)
+        c_only  — every unrelated C's waters absent from B, pooled (conserved-water chance floor;
+                  a_only above c_only is bias above chance)
+    Recall is the only meaningful per-group metric (the predictor spans every group at once).
+    One CSV per variant."""
+    results_dir: Path = args.results_dir
+    if results_dir is None or not results_dir.is_dir():
+        logger.error(f"--partition needs --results-dir pointing at a refinement_results tree: {results_dir}")
+        sys.exit(1)
+
+    out_dir = results_dir.parent
+    variants = [args.variant] if args.variant else discover_variants(results_dir)
+    distance_filter = not args.no_filter
+    logger.info(f"Results dir:  {results_dir}")
+    logger.info(f"Variants:     {variants}")
+    logger.info(f"Cutoff:       {args.cutoff} Å")
+    logger.info(f"Water filter: {f'on (≤ {args.filter_cutoff} Å to protein)' if distance_filter else 'off'}")
+
+    for variant in variants:
+        self_cifs = self_refined_cifs(results_dir, variant)
+        if not self_cifs:
+            logger.warning(f"[{variant}] no self-refined CIFs found under {results_dir}")
+            continue
+        ids = sorted(self_cifs)
+
+        # Self-refinements: cleaned CIF + water coords (own frame) + protein (alignment target).
+        cleaned, coords = {}, {}
+        for structure in ids:
+            cleaned[structure], coords[structure] = clean_phenix_waters(
+                self_cifs[structure], structure, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
+            )
+        proteins = {structure: load_protein(cleaned[structure])[0] for structure in ids}
+
+        # Cross-refinement predictors keyed by (starting_model, donor), off-diagonal only.
+        predictors = {
+            (starting_model, mtz_source): cif
+            for cif, mtz_source, starting_model in nested_predictors(results_dir, variant)
+            if starting_model != mtz_source
+        }
+
+        # Every self-refinement's waters aligned into every donor's frame (reused across pairs
+        # that share a donor). aligned[donor][structure] is None when the alignment is skipped.
+        aligned: dict[str, dict[str, np.ndarray | None]] = {donor: {} for donor in ids}
+        for donor in ids:
+            for structure in ids:
+                if structure == donor:
+                    aligned[donor][structure] = coords[donor]
+                    continue
+                report = align_to_reference(cleaned[structure], proteins[donor], out_path=None, pdb_id=structure)
+                aligned[donor][structure] = (
+                    None if report is None else (report["R"] @ coords[structure].T).T + report["t"]
+                )
+
+        rows = []
+        for (starting_model, donor), cif in sorted(predictors.items()):
+            if starting_model not in ids or donor not in ids:
+                continue
+            donor_coords = coords[donor]
+            template_coords = aligned[donor][starting_model]
+            if template_coords is None:
+                logger.warning(f"  [{variant}] {donor}_refined_by_{starting_model}: template A alignment skipped")
+                continue
+
+            predictor_cif, predictor_raw = clean_phenix_waters(
+                cif, donor, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
+            )
+            report = align_to_reference(predictor_cif, proteins[donor], out_path=None, pdb_id=f"{donor}_by_{starting_model}")
+            if report is None:
+                logger.warning(f"  [{variant}] {donor}_refined_by_{starting_model}: predictor alignment skipped")
+                continue
+            predictor_coords = (report["R"] @ predictor_raw.T).T + report["t"]
+
+            donor_near_template = _within_cutoff_mask(donor_coords, template_coords, args.cutoff)
+            shared = donor_coords[donor_near_template]
+            b_only = donor_coords[~donor_near_template]
+            a_only = template_coords[~_within_cutoff_mask(template_coords, donor_coords, args.cutoff)]
+
+            unrelated_only = [
+                aligned[donor][other][~_within_cutoff_mask(aligned[donor][other], donor_coords, args.cutoff)]
+                for other in ids
+                if other not in (starting_model, donor) and aligned[donor][other] is not None
+            ]
+            c_only = np.concatenate(unrelated_only) if unrelated_only else np.zeros((0, 3))
+
+            recall_shared, n_shared = _group_recall(shared, predictor_coords, args.cutoff)
+            recall_b_only, n_b_only = _group_recall(b_only, predictor_coords, args.cutoff)
+            recall_a_only, n_a_only = _group_recall(a_only, predictor_coords, args.cutoff)
+            recall_c_only, n_c_only = _group_recall(c_only, predictor_coords, args.cutoff)
+
+            # Predictor-side (precision) composition: classify the cross-refinement's OWN waters
+            # by which self-refinement supports them. "orphan" = near neither B nor A — waters the
+            # cross-refinement generated that neither independent refinement places (candidate
+            # artifacts, e.g. from a retained starting water).
+            pred_near_b = _within_cutoff_mask(predictor_coords, donor_coords, args.cutoff)
+            pred_near_a = _within_cutoff_mask(predictor_coords, template_coords, args.cutoff)
+            n_pred = len(predictor_coords)
+            n_pred_b = int(pred_near_b.sum())
+            n_pred_a_only = int((pred_near_a & ~pred_near_b).sum())
+            n_pred_orphan = int((~pred_near_a & ~pred_near_b).sum())
+
+            rows.append(
+                {
+                    "reference": starting_model,
+                    "donor": donor,
+                    "n_shared": n_shared,
+                    "n_b_only": n_b_only,
+                    "n_a_only": n_a_only,
+                    "n_c_only": n_c_only,
+                    "recall_shared": recall_shared,
+                    "recall_b_only": recall_b_only,
+                    "recall_a_only": recall_a_only,
+                    "recall_c_only": recall_c_only,
+                    "n_pred": n_pred,
+                    "n_pred_b": n_pred_b,
+                    "n_pred_a_only": n_pred_a_only,
+                    "n_pred_orphan": n_pred_orphan,
+                }
+            )
+            logger.info(
+                f"  [{variant}] {donor}_refined_by_{starting_model}: "
+                f"shared={recall_shared:.2f} b_only={recall_b_only:.2f} "
+                f"a_only={recall_a_only:.2f} c_only={recall_c_only:.2f}"
+            )
+
+        out_path = out_dir / f"starting_model_partition_{variant}_{args.cutoff}.csv"
+        _write_csv(out_path, PARTITION_FIELDNAMES, rows)
+
+
 def _write_csv(out_path: Path, fieldnames: list[str], rows: list[dict]) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="") as f:
@@ -427,6 +591,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Pairwise water-set agreement metrics.")
     parser.add_argument("cohort", type=Path, nargs="?", help="Cohort .txt file (cohort mode)")
     parser.add_argument("--phenix", action="store_true", help="Phenix cross-refinement mode")
+    parser.add_argument(
+        "--partition",
+        action="store_true",
+        help="Starting-model-bias decomposition: for each off-diagonal pair (A=starting model, "
+        "B=donor), report the cross-refinement's recall of shared / b_only / a_only / c_only water "
+        "groups. Needs --results-dir; one CSV per variant → starting_model_partition_<variant>_<cutoff>.csv.",
+    )
     parser.add_argument(
         "--self-refined",
         dest="self_refined",
@@ -508,7 +679,9 @@ def main() -> None:
     level = "DEBUG" if args.verbose else "WARNING" if args.quiet else "INFO"
     logger.add(sys.stderr, level=level)
 
-    if args.self_refined:
+    if args.partition:
+        run_partition(args)
+    elif args.self_refined:
         run_self_refined(args)
     elif args.phenix:
         run_phenix(args)
