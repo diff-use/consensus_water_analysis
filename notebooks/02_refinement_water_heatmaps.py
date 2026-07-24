@@ -286,17 +286,24 @@ def _(mo):
     4. **Cross-refinement (stripped)** — `phenix_pairwise_metrics_selfref_stripped`.
     5. **Cross-refinement (kept)** — `phenix_pairwise_metrics_selfref_auto`.
 
-    All five share the **same grounding** as the "re-refined" phenix figures below: the
-    cross panels use the **self-ref-grounded** matrix (`…_selfref_…`, ground truth =
-    `a_refined_by_a`), *not* the original-grounded one — so like panels 1–3 their leading
-    diagonal is a self-vs-self comparison (trivially perfect) and is masked on **all
-    five**. Panels 1–3 are reference-vs-reference matrices (axes: predictor × ground
-    truth); only their lower triangle is of interest, so the switch below folds their
-    upper triangle for **any** metric (not just the symmetric ones). Panels 4–5 are the
-    **directional** cross-refinement matrices (axes: mtz used × starting model; predictor ≠
-    ground truth on transpose): never folded. Axes follow the **Sort axes by** selector and
-    the cutoff in **Output & display options**. Self-contained — reads its own CSVs,
-    independent of the variant/baseline selectors below.
+    The cross panels' **ground truth is set by the "Cross-refinement ground truth"
+    selector** below:
+
+    - **self-ref (`a_refined_by_a`)** *(default)* — the `…_selfref_…` matrices, matching
+      the "re-refined" phenix figures below. Like panels 1–3, the leading diagonal is a
+      self-vs-self comparison (trivially perfect) and is **masked**.
+    - **PDB-REDO (`original-a`)** — the original-grounded `phenix_pairwise_metrics_<v>`
+      matrices. Here the diagonal (`a_refined_by_a` vs deposited `original-a`) is
+      **meaningful** — the self-re-refinement-vs-deposited agreement — so it is **kept**,
+      not masked.
+
+    Panels 1–3 are reference-vs-reference matrices (axes: predictor × ground truth); only
+    their lower triangle is of interest, so the switch below folds their upper triangle for
+    **any** metric (not just the symmetric ones). Panels 4–5 are the **directional**
+    cross-refinement matrices (axes: mtz used × starting model; predictor ≠ ground truth on
+    transpose): never folded. Axes follow the **Sort axes by** selector and the cutoff in
+    **Output & display options**. Self-contained — reads its own CSVs, independent of the
+    variant/baseline selectors below.
     """)
     return
 
@@ -308,6 +315,17 @@ def _(METRICS, mo):
     )
     summary_mask_ui = mo.ui.switch(
         value=True, label="mask upper tri of reference panels (1–3)"
+    )
+    # Ground truth for the cross-refinement panels (4–5) only:
+    #   self-ref  -> phenix_pairwise_metrics_selfref_<v> (ground truth = a_refined_by_a);
+    #                diagonal is self-vs-self (perfect) and is masked.
+    #   PDB-REDO  -> phenix_pairwise_metrics_<v> (ground truth = deposited original-a);
+    #                diagonal (a_refined_by_a vs original-a) is meaningful and NOT masked.
+    summary_ground_ui = mo.ui.radio(
+        options=["self-ref (a_refined_by_a)", "PDB-REDO (original-a)"],
+        value="self-ref (a_refined_by_a)",
+        label="Cross-refinement ground truth (panels 4–5)",
+        inline=True,
     )
     # Blank = auto (data min / shared_range; note the shared vmax picks up the masked
     # diagonal's self-comparison = 1.0). Enter a number to override either bound.
@@ -321,6 +339,7 @@ def _(METRICS, mo):
     summary_save_ui = mo.ui.run_button(label="💾 Save figure")
     mo.vstack([
         mo.hstack([summary_metric_ui, summary_mask_ui, summary_save_ui], justify="start"),
+        summary_ground_ui,
         mo.hstack([summary_vmin_ui, summary_vmax_ui], justify="start"),
         mo.hstack(
             [summary_title_fs_ui, summary_label_fs_ui, summary_tick_fs_ui, summary_cbar_fs_ui],
@@ -329,6 +348,7 @@ def _(METRICS, mo):
     ])
     return (
         summary_cbar_fs_ui,
+        summary_ground_ui,
         summary_label_fs_ui,
         summary_mask_ui,
         summary_metric_ui,
@@ -352,6 +372,7 @@ def _(
     phenix_dir_ui,
     save_fig,
     summary_cbar_fs_ui,
+    summary_ground_ui,
     summary_label_fs_ui,
     summary_mask_ui,
     summary_metric_ui,
@@ -364,11 +385,14 @@ def _(
     water_counts,
 ):
     # Self-contained: reads exactly the five CSVs it needs (stripped + auto fixed),
-    # independent of the variant/baseline selectors. Every panel is grounded on the same
-    # ground truth as the "re-refined" phenix figures below: the cross panels use the
-    # SELF-REF-grounded matrix (phenix_pairwise_metrics_selfref_*, ground truth =
-    # a_refined_by_a), NOT the original-grounded one — so like panels 1–3 their diagonal
-    # is a self-vs-self comparison (trivially perfect) and is masked on all five.
+    # independent of the variant/baseline selectors. Panels 1–3 are reference-vs-reference
+    # (deposited, and each self-refinement matrix). The cross panels (4–5) follow the
+    # "Cross-refinement ground truth" selector:
+    #   self-ref  -> phenix_pairwise_metrics_selfref_* (ground truth = a_refined_by_a);
+    #                matches the "re-refined" figures below, diagonal is self-vs-self
+    #                (trivially perfect) and is masked.
+    #   PDB-REDO  -> phenix_pairwise_metrics_*         (ground truth = deposited original-a);
+    #                diagonal (a_refined_by_a vs original-a) is meaningful and NOT masked.
     # `is_reference` marks the reference-vs-reference panels (1–3), whose upper triangle
     # may fold (for any metric — only the lower triangle is of interest there) and whose
     # axes are predictor × ground-truth; the directional cross panels (4–5) never fold.
@@ -382,13 +406,19 @@ def _(
     if not _ref_path.exists():
         _ref_path = _dir / "reference_pairwise_metrics.csv"
 
+    # Cross-panel grounding: self-ref inserts the "selfref_" filename infix and masks the
+    # (perfect) diagonal; PDB-REDO uses the original-grounded CSV and keeps the diagonal.
+    _self_ground = summary_ground_ui.value.startswith("self-ref")
+    _cross_infix = "selfref_" if _self_ground else ""
+    _cross_tag = "self-ref" if _self_ground else "PDB-REDO"
+
     # (label, path, index_col, columns_col, is_reference)
     _sources = [
         ("PDB-REDO", _ref_path, "structure_ref", "structure_mobile", True),
         ("Phenix (stripped)", _dir / f"self_refined_pairwise_metrics_stripped_{_co}.csv", "structure_ref", "structure_mobile", True),
         ("Phenix (kept)", _dir / f"self_refined_pairwise_metrics_auto_{_co}.csv", "structure_ref", "structure_mobile", True),
-        ("Cross-refinement (stripped)", _dir / f"phenix_pairwise_metrics_selfref_stripped_{_co}.csv", "reference", "predictor", False),
-        ("Cross-refinement (kept)", _dir / f"phenix_pairwise_metrics_selfref_auto_{_co}.csv", "reference", "predictor", False),
+        (f"Cross-refinement (stripped, {_cross_tag})", _dir / f"phenix_pairwise_metrics_{_cross_infix}stripped_{_co}.csv", "reference", "predictor", False),
+        (f"Cross-refinement (kept, {_cross_tag})", _dir / f"phenix_pairwise_metrics_{_cross_infix}auto_{_co}.csv", "reference", "predictor", False),
     ]
 
     _missing = [_lbl for _lbl, _p, *_ in _sources if not _p.exists()]
@@ -402,12 +432,15 @@ def _(
     _ref_df = _frames[_sources[0][0]][0]
     _order = order_by_count(sorted(set(_ref_df["structure_ref"]) | set(_ref_df["structure_mobile"])), water_counts)
 
-    # Every panel's diagonal is a self-vs-self comparison (trivially perfect) → mask all.
-    # Fold the upper triangle of the reference panels (1–3) whenever the switch is on —
-    # only the lower triangle is of interest there, regardless of metric symmetry; the
-    # directional cross panels (4–5) never fold. Axes: reference = predictor × ground
-    # truth; cross = mtz used × starting model. These are per-column, shared by all rows.
+    # Reference panels (1–3) have a self-vs-self diagonal → always masked. Cross panels
+    # (4–5) mask the diagonal only when self-ref-grounded (a_refined_by_a vs itself =
+    # perfect); under PDB-REDO grounding the diagonal (a_refined_by_a vs original-a) is
+    # meaningful and kept. Fold the upper triangle of the reference panels whenever the
+    # switch is on — only the lower triangle is of interest there, regardless of metric
+    # symmetry; the directional cross panels never fold. Axes: reference = predictor ×
+    # ground truth; cross = mtz used × starting model. Per-column, shared by all rows.
     _fold = summary_mask_ui.value
+    _mask_diag = {_lbl: (_ref or _self_ground) for _lbl, _p, _idx, _col, _ref in _sources}
     _mask_upper = {_lbl: (_fold and _ref) for _lbl, _p, _idx, _col, _ref in _sources}
     _xlabel = {_lbl: ("predictor" if _ref else "mtz used") for _lbl, _p, _idx, _col, _ref in _sources}
     _ylabel = {_lbl: ("ground truth" if _ref else "starting model") for _lbl, _p, _idx, _col, _ref in _sources}
@@ -443,7 +476,7 @@ def _(
     _fig = make_panel_grid(
         _rows,
         row_specs=_row_specs,
-        mask_diagonal=True,
+        mask_diagonal=_mask_diag,
         mask_upper=_mask_upper,
         panel_size=3.6,
         fmt=".2f",
@@ -454,7 +487,7 @@ def _(
         tick_fontsize=_limit(summary_tick_fs_ui.value),
         cbar_fontsize=_limit(summary_cbar_fs_ui.value),
     )
-    save_fig(_fig, f"summary_grid_{'-'.join(_metrics)}", save=summary_save_ui.value)
+    save_fig(_fig, f"summary_grid_{'-'.join(_metrics)}_cross-{_cross_tag}", save=summary_save_ui.value)
     _fig
     return
 
