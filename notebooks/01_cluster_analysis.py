@@ -114,6 +114,13 @@ def _(Path, cohort_input, config, mo, pd):
     clusters = pd.read_csv(SUBSET / f"clusters{_suffix}.csv")
     cluster_members = pd.read_csv(SUBSET / f"cluster_members{_suffix}.csv")
 
+    # Per-structure deposited metadata (resolution, R-free, ...). Water-level
+    # subsets share the parent cohort's metadata.csv, so fall back to DATA.
+    _meta_path = SUBSET / "metadata.csv"
+    if not _meta_path.exists():
+        _meta_path = DATA / "metadata.csv"
+    metadata = pd.read_csv(_meta_path) if _meta_path.exists() else None
+
     # Occupancy above which a cluster counts as consensus — used by the occupancy
     # figure and every per-structure precision/recall computation downstream.
     cluster_occupancy_cutoff = 0.3
@@ -133,6 +140,7 @@ def _(Path, cohort_input, config, mo, pd):
         cluster_occupancy_cutoff,
         clusters,
         match_radius,
+        metadata,
     )
 
 
@@ -571,6 +579,191 @@ def _(
 @app.cell
 def _(mo):
     mo.md("""
+    ### Consensus vs non-consensus water quality
+
+    The premise behind every filter, tested at the water level: are the waters that
+    landed in a conserved site actually higher-quality than the ones that didn't?
+    Each water is labelled **consensus** (a within-cutoff member of a cluster whose
+    occupancy ≥ the consensus cutoff) or **non-consensus** (noise, radius-rejected,
+    or a member of a low-occupancy cluster), then the per-metric distributions of the
+    two groups are overlaid — each density normalized separately, since the groups
+    differ hugely in size. Dashed lines mark the reference values entered above. The
+    x-axis can be clamped to the 99.9 percentile so a few extreme values don't
+    stretch the range.
+    """)
+    return
+
+
+@app.cell
+def _(PLOTS_DIR, mo):
+    quality_clamp = mo.ui.checkbox(value=True, label="clamp x to 99.9 pct")
+    quality_vertical = mo.ui.checkbox(value=True, label="vertical layout (uncheck for horizontal)")
+    quality_font_size = mo.ui.slider(
+        start=6, stop=24, step=1, value=14, label="font size", show_value=True,
+    )
+    quality_save_path = mo.ui.text(
+        value=str(PLOTS_DIR / "consensus_vs_nonconsensus_metric_distribution.png"),
+        label="save path", full_width=True,
+    )
+    quality_save_dpi = mo.ui.number(start=72, stop=1200, step=1, value=300, label="dpi")
+    quality_save_button = mo.ui.run_button(label="save figure")
+    mo.vstack([
+        mo.hstack([quality_clamp, quality_vertical, quality_font_size], justify="start"),
+        mo.hstack([quality_save_path, quality_save_dpi, quality_save_button], justify="start"),
+    ])
+    return (
+        quality_clamp,
+        quality_font_size,
+        quality_save_button,
+        quality_save_dpi,
+        quality_save_path,
+        quality_vertical,
+    )
+
+
+@app.cell
+def _(
+    Path,
+    cluster_members,
+    cluster_occupancy_cutoff,
+    clusters,
+    occ_metric_refs,
+    pairplot_metrics,
+    plt,
+    quality_clamp,
+    quality_font_size,
+    quality_save_button,
+    quality_save_dpi,
+    quality_save_path,
+    quality_vertical,
+    sns,
+):
+    _metrics = list(pairplot_metrics.value)
+    _label = {"edia": "EDIA", "b_factor_zscore": "B-factor z-score"}
+
+    # conserved = within-cutoff member of a cluster whose occupancy clears the
+    # cutoff; everything else (noise, radius-rejected, low-occupancy members) is
+    # not. Matches the labelling in the occupancy figure. The boolean column name
+    # becomes the legend title ("conserved") with True/False entries.
+    _conserved_ids = set(
+        clusters.loc[clusters["cluster_occupancy"] >= cluster_occupancy_cutoff, "cluster_id"]
+    )
+    _labelled = cluster_members.assign(
+        conserved=cluster_members["within_cutoff"]
+        & cluster_members["cluster_id"].isin(_conserved_ids)
+    )
+
+    _fs = quality_font_size.value
+    _n = max(len(_metrics), 1)
+
+    # Pin the data rectangle in inches so it is identical across cohorts: each
+    # panel is PANEL_W x PANEL_H, with fixed label gutters. tight_layout /
+    # bbox_inches="tight" would instead resize the rectangle to fit each cohort's
+    # tick labels, which is why the same figure came out at different sizes.
+    _panel_w, _panel_h = 2.4, 2.2
+    _left, _right, _top, _bottom, _gap = 0.75, 0.2, 0.2, 0.6, 0.6
+    if quality_vertical.value:
+        _fig_w = _left + _panel_w + _right
+        _fig_h = _bottom + _n * _panel_h + (_n - 1) * _gap + _top
+        _fig, _axes = plt.subplots(_n, 1, figsize=(_fig_w, _fig_h), squeeze=False)
+        _axes = _axes[:, 0]
+        _fig.subplots_adjust(
+            left=_left / _fig_w, right=1 - _right / _fig_w,
+            bottom=_bottom / _fig_h, top=1 - _top / _fig_h,
+            hspace=_gap / _panel_h,
+        )
+    else:
+        _fig_w = _left + _n * _panel_w + (_n - 1) * _gap + _right
+        _fig_h = _bottom + _panel_h + _top
+        _fig, _axes = plt.subplots(1, _n, figsize=(_fig_w, _fig_h), squeeze=False)
+        _axes = _axes[0]
+        _fig.subplots_adjust(
+            left=_left / _fig_w, right=1 - _right / _fig_w,
+            bottom=_bottom / _fig_h, top=1 - _top / _fig_h,
+            wspace=_gap / _panel_w,
+        )
+
+    for _ax, _metric in zip(_axes, _metrics):
+        _data = _labelled.dropna(subset=[_metric])
+        if quality_clamp.value and len(_data):
+            _hi = _data[_metric].quantile(0.999)
+            _data = _data[_data[_metric] <= _hi]
+        sns.histplot(
+            data=_data, x=_metric, hue="conserved",
+            stat="density", common_norm=False,
+            element="step", fill=True, alpha=0.5, ax=_ax,
+            hue_order=[True, False],
+            # palette="Dark2",
+            palette={True: "r", False: "grey"},
+            legend=False,
+        )
+        _refs = []
+        for _tok in occ_metric_refs.value.get(_metric, "").replace(",", " ").split():
+            try:
+                _refs.append(float(_tok))
+            except ValueError:
+                pass
+        for _rv in _refs:
+            _ax.axvline(_rv, color="k", ls="--", lw=1.5)
+            # _ax.text(_rv, _ax.get_ylim()[1] * 0.98, f"{_rv:g}", rotation=90,
+            #          va="top", ha="right", fontsize=_fs - 3, color="0.4")
+        _ax.set_xlabel(_label.get(_metric, _metric), fontsize=_fs)
+        _ax.set_ylabel("density", fontsize=_fs)
+        _ax.tick_params(labelsize=_fs)
+
+        # Stats on the full (unclamped) data so min/max reflect the real
+        # distribution, not the display clamp. Grouped by consensus label.
+        _summary = (
+            _labelled.dropna(subset=[_metric])
+            .groupby("conserved")[_metric]
+            .agg(["min", "median", "mean", "std", "max", "count"])
+        )
+        print(f"[water] {_metric}:")
+        for _grp, _row in _summary.iterrows():
+            _name = "consensus" if _grp else "non-consensus"
+            print(
+                f"  {_name:>13}: min={_row['min']:.4g} median={_row['median']:.4g} "
+                f"mean={_row['mean']:.4g} std={_row['std']:.4g} max={_row['max']:.4g} "
+                f"n={int(_row['count'])}"
+            )
+
+        # Fraction of each group filtered OUT at each reference threshold (the
+        # vertical dashed lines), matching cw.filter's inclusive defaults: a water
+        # exactly on the cutoff is KEPT, so the drop test is strict. EDIA keeps
+        # EDIAm >= cutoff, so it drops edia < cutoff; B-factor (z-score or raw)
+        # keeps b <= cutoff, so it drops b > cutoff. Same full unclamped data as
+        # the stats above. Metrics without a defined filter direction are skipped.
+        _drop_below = {"edia"}
+        _drop_above = {"b_factor_zscore", "b_factor"}
+        _full = _labelled.dropna(subset=[_metric])
+        for _rv in _refs:
+            if _metric in _drop_below:
+                _dropped = _full[_metric] < _rv
+                _op = "<"
+            elif _metric in _drop_above:
+                _dropped = _full[_metric] > _rv
+                _op = ">"
+            else:
+                continue
+            print(f"  filtered out ({_metric} {_op} {_rv:g}):")
+            for _grp, _idx in _full.groupby("conserved").groups.items():
+                _name = "consensus" if _grp else "non-consensus"
+                _g = _dropped.loc[_idx]
+                print(f"    {_name:>13}: {_g.mean():.4f} (n={len(_g)})")
+
+    if quality_save_button.value:
+        _out = Path(quality_save_path.value)
+        _out.parent.mkdir(parents=True, exist_ok=True)
+        _fig.savefig(_out, dpi=int(quality_save_dpi.value))
+        print(f"saved to {_out}")
+
+    _fig
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
     ## Precision–recall per structure
     """)
     return
@@ -775,7 +968,234 @@ def _(
 
 
 @app.cell
-def _():
+def _(mo):
+    mo.md("""
+    ## Good vs poor structures — metadata distributions
+
+    The mirror of the consensus/non-consensus water plot, but at the *structure*
+    level. Each structure is labelled **good** or **poor** by whether a chosen
+    per-structure metric (default `f1`, the structure's agreement with the
+    consensus) is **at or above** a cutoff, then the deposited-metadata
+    distributions of the two groups are overlaid (default `resolution` and
+    `deposited_r_free`) — each density normalized separately, since the groups
+    differ in size. This asks whether the structures that best reproduce the
+    conserved sites are also the higher-quality depositions. The split metric can
+    be any per-structure column (precision/recall/f1/num_water from the
+    precision–recall analysis, or a metadata column); the x-axis can be clamped to
+    the 0.1–99.9 percentile so a few extreme values don't stretch the range.
+    """)
+    return
+
+
+@app.cell
+def _(metadata, pd, pr_df):
+    # One row per structure: precision/recall/f1/num_water joined to deposited
+    # metadata. metadata's own num_water (deposited count) is kept as
+    # num_water_deposited so pr_df's clustered count stays the plain `num_water`.
+    # Metadata scalars can carry "<missing>" strings, so coerce non-id columns to
+    # numeric; string columns (ligand_names, space_group, ...) become all-NaN and
+    # drop out of the numeric-column menus below.
+    if metadata is None:
+        structure_metrics = pr_df.copy()
+    else:
+        _meta = metadata.copy()
+        for _c in _meta.columns:
+            if _c != "pdb_id":
+                _meta[_c] = pd.to_numeric(_meta[_c], errors="coerce")
+        structure_metrics = pr_df.merge(
+            _meta, on="pdb_id", how="left", suffixes=("", "_deposited")
+        )
+
+    structure_numeric_cols = [
+        _c for _c in structure_metrics.columns
+        if _c != "pdb_id"
+        and pd.api.types.is_numeric_dtype(structure_metrics[_c])
+        and structure_metrics[_c].notna().any()
+    ]
+    return structure_metrics, structure_numeric_cols
+
+
+@app.cell
+def _(PLOTS_DIR, mo, structure_numeric_cols):
+    good_poor_split_metric = mo.ui.dropdown(
+        options=structure_numeric_cols,
+        value="f1" if "f1" in structure_numeric_cols else structure_numeric_cols[0],
+        label="split metric (good = ≥ cutoff)",
+    )
+    _dist_default = [
+        _m for _m in ["resolution", "deposited_r_free"] if _m in structure_numeric_cols
+    ]
+    good_poor_dist_metrics = mo.ui.multiselect(
+        options=structure_numeric_cols,
+        value=_dist_default or structure_numeric_cols[:1],
+        label="distribution metrics",
+    )
+    good_poor_clamp = mo.ui.checkbox(value=True, label="clamp x to 0.1–99.9 pct")
+    good_poor_vertical = mo.ui.checkbox(value=True, label="vertical layout (uncheck for horizontal)")
+    good_poor_font_size = mo.ui.slider(
+        start=6, stop=24, step=1, value=14, label="font size", show_value=True,
+    )
+    good_poor_save_path = mo.ui.text(
+        value=str(PLOTS_DIR / "good_vs_poor_metadata_distribution.png"),
+        label="save path", full_width=True,
+    )
+    good_poor_save_dpi = mo.ui.number(start=72, stop=1200, step=1, value=300, label="dpi")
+    good_poor_save_button = mo.ui.run_button(label="save figure")
+    mo.vstack([
+        mo.hstack([good_poor_split_metric, good_poor_dist_metrics], justify="start"),
+        mo.hstack([good_poor_clamp, good_poor_vertical, good_poor_font_size], justify="start"),
+        mo.hstack([good_poor_save_path, good_poor_save_dpi, good_poor_save_button], justify="start"),
+    ])
+    return (
+        good_poor_clamp,
+        good_poor_dist_metrics,
+        good_poor_font_size,
+        good_poor_save_button,
+        good_poor_save_dpi,
+        good_poor_save_path,
+        good_poor_split_metric,
+        good_poor_vertical,
+    )
+
+
+@app.cell
+def _(good_poor_split_metric, mo, structure_metrics):
+    # Cutoff defaults to the median of the selected split metric; the stats line
+    # (min / median / mean / max) is shown so a different cutoff can be picked by
+    # hand. Defined in its own cell so it re-defaults to the median whenever the
+    # split metric changes, without resetting the other widgets above.
+    _split = good_poor_split_metric.value
+    _vals = structure_metrics[_split].dropna()
+    if len(_vals):
+        good_poor_cutoff = mo.ui.number(value=round(float(_vals.median()), 4), step=0.01, label="cutoff")
+        _stats = mo.md(
+            f"**{_split}** — min `{_vals.min():.4g}` · median `{_vals.median():.4g}` · "
+            f"mean `{_vals.mean():.4g}` · max `{_vals.max():.4g}`  (n = {len(_vals)})"
+        )
+    else:
+        good_poor_cutoff = mo.ui.number(value=0.0, step=0.01, label="cutoff")
+        _stats = mo.md(f"**{_split}** — no values")
+    mo.vstack([_stats, good_poor_cutoff])
+    return (good_poor_cutoff,)
+
+
+@app.cell
+def _(
+    Path,
+    good_poor_clamp,
+    good_poor_cutoff,
+    good_poor_dist_metrics,
+    good_poor_font_size,
+    good_poor_save_button,
+    good_poor_save_dpi,
+    good_poor_save_path,
+    good_poor_split_metric,
+    good_poor_vertical,
+    np,
+    plt,
+    sns,
+    structure_metrics,
+):
+    _label = {
+        "resolution": "resolution (Å)",
+        "deposited_r_free": "deposited R-free",
+        "deposited_r_work": "deposited R-work",
+        "r_free": "R-free",
+        "r_work": "R-work",
+        "num_water": "#water (clustered)",
+        "num_water_deposited": "#water (deposited)",
+        "unit_cell_volume": "unit-cell volume (Å³)",
+        "f1": "F1",
+        "precision": "precision",
+        "recall": "recall",
+    }
+    _split = good_poor_split_metric.value
+    _cutoff = float(good_poor_cutoff.value)
+    _metrics = list(good_poor_dist_metrics.value)
+
+    # good = split metric at or above the cutoff; poor = below. Structures whose
+    # split metric is missing are dropped from both groups. The categorical column
+    # name ("group") drives the legend, with good_order = [good, poor].
+    _base = structure_metrics.dropna(subset=[_split])
+    _labelled = _base.assign(
+        group=np.where(_base[_split] >= _cutoff, "good", "poor")
+    )
+    _n_good = int((_labelled["group"] == "good").sum())
+    _n_poor = int((_labelled["group"] == "poor").sum())
+    print(f"split on {_split} @ {_cutoff}: {_n_good} good (≥), {_n_poor} poor (<)")
+
+    _fs = good_poor_font_size.value
+    _n = max(len(_metrics), 1)
+
+    # Fixed data-rectangle layout so the figure is identical across cohorts —
+    # matches the consensus/non-consensus quality plot above.
+    _panel_w, _panel_h = 2.4, 2.2
+    _left, _right, _top, _bottom, _gap = 0.75, 0.2, 0.4, 0.6, 0.6
+    if good_poor_vertical.value:
+        _fig_w = _left + _panel_w + _right
+        _fig_h = _bottom + _n * _panel_h + (_n - 1) * _gap + _top
+        _fig, _axes = plt.subplots(_n, 1, figsize=(_fig_w, _fig_h), squeeze=False)
+        _axes = _axes[:, 0]
+        _fig.subplots_adjust(
+            left=_left / _fig_w, right=1 - _right / _fig_w,
+            bottom=_bottom / _fig_h, top=1 - _top / _fig_h,
+            hspace=_gap / _panel_h,
+        )
+    else:
+        _fig_w = _left + _n * _panel_w + (_n - 1) * _gap + _right
+        _fig_h = _bottom + _panel_h + _top
+        _fig, _axes = plt.subplots(1, _n, figsize=(_fig_w, _fig_h), squeeze=False)
+        _axes = _axes[0]
+        _fig.subplots_adjust(
+            left=_left / _fig_w, right=1 - _right / _fig_w,
+            bottom=_bottom / _fig_h, top=1 - _top / _fig_h,
+            wspace=_gap / _panel_w,
+        )
+
+    for _idx, (_ax, _metric) in enumerate(zip(_axes, _metrics)):
+        _data = _labelled.dropna(subset=[_metric])
+        if good_poor_clamp.value and len(_data):
+            _lo, _hi = _data[_metric].quantile([0.001, 0.999])
+            _data = _data[_data[_metric].between(_lo, _hi)]
+        sns.histplot(
+            data=_data, x=_metric, hue="group",
+            stat="density", common_norm=False,
+            element="step", fill=True, alpha=0.5, ax=_ax,
+            hue_order=["good", "poor"],
+            palette={"good": "r", "poor": "grey"},
+            legend=False,
+            # legend=(_idx == 0),
+        )
+        _ax.set_xlabel(_label.get(_metric, _metric), fontsize=_fs)
+        _ax.set_ylabel("density", fontsize=_fs)
+        _ax.tick_params(labelsize=_fs)
+        if _idx == 0 and _ax.get_legend() is not None:
+            _ax.get_legend().set_title(f"{_label.get(_split, _split)} ≥ {_cutoff:g}")
+            for _txt in _ax.get_legend().get_texts():
+                _txt.set_fontsize(_fs - 2)
+
+        # Stats on the full (unclamped) data so min/max reflect the real
+        # distribution, not the display clamp. Grouped by good/poor label.
+        _summary = (
+            _labelled.dropna(subset=[_metric])
+            .groupby("group")[_metric]
+            .agg(["min", "median", "mean", "std", "max", "count"])
+        )
+        print(f"[structure] {_metric}:")
+        for _grp, _row in _summary.iterrows():
+            print(
+                f"  {_grp:>4}: min={_row['min']:.4g} median={_row['median']:.4g} "
+                f"mean={_row['mean']:.4g} std={_row['std']:.4g} max={_row['max']:.4g} "
+                f"n={int(_row['count'])}"
+            )
+
+    if good_poor_save_button.value:
+        _out = Path(good_poor_save_path.value)
+        _out.parent.mkdir(parents=True, exist_ok=True)
+        _fig.savefig(_out, dpi=int(good_poor_save_dpi.value))
+        print(f"saved to {_out}")
+
+    _fig
     return
 
 

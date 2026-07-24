@@ -71,6 +71,7 @@ def plot_pr_scatter(
     n_color_bins: int | None = None,
     color_quantile_range: tuple[float, float] = (0.01, 0.99),
     fontsize: float | None = None,
+    cbar_kwargs: dict | None = None,
 ):
     """Precision vs recall for per-structure rows, on an equal-aspect square.
 
@@ -81,14 +82,21 @@ def plot_pr_scatter(
     n_color_bins, when set, discretizes the color scale into that many quantile bins
     over color_quantile_range (default inner 1–99%) — each bin holds ~equal counts and
     the extreme tails are capped, so the colorbar grows up/down triangles for the
-    capped values. Integer-valued colors get integer bin edges. Leave None for a plain
-    continuous scale.
+    capped values. cmap is resampled to one distinct color per bin (with the two
+    triangle colors taken from its ends), so qualitative palettes (e.g. "tab10")
+    render as cleanly separated bands rather than collapsing onto one color — as long
+    as the palette carries at least n_color_bins + 2 colors. Integer-valued colors get
+    integer bin edges. Leave None for a plain continuous scale.
 
     style is "scatter" (alpha honored) or "hexbin" (hexes colored by the mean color
     value per cell). lim sets both axes to the same range (equal x/y); None autoscales.
     fontsize, when set, sizes every text element (axis labels, title, tick labels, and
     the colorbar label/ticks) so the caller can match it to a legend/annotation drawn
-    on the returned ax; None keeps matplotlib defaults. Returns (fig, ax).
+    on the returned ax; None keeps matplotlib defaults.
+
+    cbar_kwargs is merged into the fig.colorbar call (over the {"pad": 0.02} default),
+    so a caller can shrink the bar (e.g. {"fraction": 0.046}) when the square-aspect
+    scatter leaves it towering over a small panel. Returns (fig, ax).
     """
     if ax is None:
         fig, ax = plt.subplots(figsize=(4, 3))
@@ -103,18 +111,29 @@ def plot_pr_scatter(
         else:
             color_values = np.asarray(color)
 
-    norm, boundaries = None, None
+    norm, boundaries, plot_cmap = None, None, cmap
     if color_values is not None and n_color_bins:
         edges = quantile_boundaries(color_values, n_color_bins, color_quantile_range)
         if len(edges) >= 2:
             boundaries = edges
-            norm = mcolors.BoundaryNorm(boundaries, ncolors=256, extend="both")
+            n_bands = len(edges) - 1
+            # One distinct color per band. Sample n_bands + 2 colors and build a
+            # ListedColormap of exactly n_bands entries with the outer two as the
+            # under/over (extend-triangle) colors, then size the norm to that band
+            # count. Handing the norm the raw cmap with ncolors=256 instead lets a
+            # small qualitative colormap (e.g. Dark2's 8 entries) overflow every
+            # band past the first onto its last color — the "all grey" bug.
+            picks = plt.get_cmap(cmap)(np.linspace(0, 1, n_bands + 2))
+            plot_cmap = mcolors.ListedColormap(picks[1:-1]).with_extremes(
+                under=picks[0], over=picks[-1]
+            )
+            norm = mcolors.BoundaryNorm(boundaries, ncolors=plot_cmap.N)
 
     if style == "hexbin":
         sc = ax.hexbin(
             pr_df[recall_col], pr_df[precision_col],
             C=color_values, reduce_C_function=np.mean,
-            gridsize=20, cmap=cmap, norm=norm, mincnt=1,
+            gridsize=20, cmap=plot_cmap, norm=norm, mincnt=1,
         )
     elif color_values is None:
         ax.scatter(
@@ -125,16 +144,17 @@ def plot_pr_scatter(
     else:
         sc = ax.scatter(
             pr_df[recall_col], pr_df[precision_col],
-            c=color_values, cmap=cmap, norm=norm,
+            c=color_values, cmap=plot_cmap, norm=norm,
             alpha=alpha, edgecolors="k", s=marker_size,
         )
 
     if sc is not None and color_values is not None:
+        cbar_opts = {"pad": 0.02, **(cbar_kwargs or {})}
         cbar = (
             fig.colorbar(sc, ax=ax, extend="both", spacing="uniform",
-                         ticks=boundaries, format="%.3g", pad=0.02)
+                         ticks=boundaries, format="%.3g", **cbar_opts)
             if boundaries is not None
-            else fig.colorbar(sc, ax=ax, pad=0.02)
+            else fig.colorbar(sc, ax=ax, **cbar_opts)
         )
         if color_label:
             cbar.set_label(color_label, fontsize=fontsize)
