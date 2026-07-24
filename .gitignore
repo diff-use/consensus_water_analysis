@@ -4,8 +4,8 @@ CLAUDE.md
 memory/
 tests/fixtures/
 data/
+docs/
 __marimo__/
-experiments/
 porting_reference/
 __pycache__/
 *.pyc
