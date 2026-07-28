@@ -167,6 +167,28 @@ def resolve_deposited_r_factors(entry: dict | None) -> tuple[float | str, float 
     return _first("ls_R_factor_R_work"), _first("ls_R_factor_R_free")
 
 
+def resolve_diffrn_temp(entry: dict | None) -> float | str:
+    """Lowest ``_diffrn.ambient_temp`` (K) on an RCSB entry, or ``'<missing>'``.
+
+    The re-refined local CIFs mostly drop this category, so it comes from the same
+    entry JSON already fetched for experiment_condition. Lowest wins when an entry
+    lists several datasets: it is the temperature that determines whether the
+    solvent is frozen, which is what a water analysis cares about.
+    """
+    if entry is None:
+        return "<missing>"
+    temps = []
+    for block in entry.get("diffrn") or []:
+        value = block.get("ambient_temp")
+        if value is None:
+            continue
+        try:
+            temps.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return min(temps) if temps else "<missing>"
+
+
 def metadata_row(cif_path: Path) -> dict:
     """Extract one metadata CSV row from a local mmCIF file + RCSB API.
 
@@ -175,7 +197,7 @@ def metadata_row(cif_path: Path) -> dict:
       - gemmi.cif.read       → r_work, r_free (local re-refined CIF has these)
                                ligand_names (from _pdbx_entity_nonpoly.comp_id loop)
       - RCSB Data API        → experiment_condition, starting_model,
-                               deposited_r_work, deposited_r_free
+                               deposited_r_work, deposited_r_free, diffrn_temp
                                (absent from re-refined local CIFs)
     """
     pdb_id = cif_path.stem.removesuffix("_final")
@@ -242,5 +264,6 @@ def metadata_row(cif_path: Path) -> dict:
         "num_water": num_water,
         "ligand_names": ligand_names,
         "experiment_condition": experiment_condition,
+        "diffrn_temp": resolve_diffrn_temp(entry),
         "starting_model": starting_model,
     }
