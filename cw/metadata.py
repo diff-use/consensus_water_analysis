@@ -167,6 +167,65 @@ def resolve_deposited_r_factors(entry: dict | None) -> tuple[float | str, float 
     return _first("ls_R_factor_R_work"), _first("ls_R_factor_R_free")
 
 
+def resolve_diffrn_temp(entry: dict | None) -> float | str:
+    """Lowest ``_diffrn.ambient_temp`` (K) on an RCSB entry, or ``'<missing>'``.
+
+    The re-refined local CIFs mostly drop this category, so it comes from the same
+    entry JSON already fetched for experiment_condition. Lowest wins when an entry
+    lists several datasets: it is the temperature that determines whether the
+    solvent is frozen, which is what a water analysis cares about.
+    """
+    if entry is None:
+        return "<missing>"
+    temps = []
+    for block in entry.get("diffrn") or []:
+        value = block.get("ambient_temp")
+        if value is None:
+            continue
+        try:
+            temps.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return min(temps) if temps else "<missing>"
+
+
+def resolve_crystal_grow(entry: dict | None) -> tuple[float | str, float | str]:
+    """``(ph, crystal_grow_temp)`` from an RCSB entry's ``exptl_crystal_grow`` array.
+
+    These are crystallisation conditions — the same category ``experiment_condition``
+    is parsed from — and are distinct from ``diffrn_temp``, which is the temperature
+    the diffraction data were collected at. Returns the first parseable value across
+    blocks for each field, else ``'<missing>'``.
+
+    ``ph`` prefers the scalar ``pH``; when an entry gives only ``pdbx_pH_range`` the
+    raw range string is passed through verbatim ('4.4-4.8'). Both fields are optional
+    and roughly half of a typical cohort supplies neither, so the column holds floats
+    and range strings side by side — read it as object dtype, not float.
+    """
+    if entry is None:
+        return "<missing>", "<missing>"
+    blocks = entry.get("exptl_crystal_grow") or []
+
+    def _first(key: str) -> float | str:
+        for block in blocks:
+            value = block.get(key)
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+        return "<missing>"
+
+    ph = _first("pH")
+    if ph == "<missing>":
+        for block in blocks:
+            ph_range = str(block.get("pdbx_pH_range") or "").strip()
+            if ph_range:
+                ph = ph_range
+                break
+    return ph, _first("temp")
+
+
 def metadata_row(cif_path: Path) -> dict:
     """Extract one metadata CSV row from a local mmCIF file + RCSB API.
 
@@ -175,7 +234,8 @@ def metadata_row(cif_path: Path) -> dict:
       - gemmi.cif.read       → r_work, r_free (local re-refined CIF has these)
                                ligand_names (from _pdbx_entity_nonpoly.comp_id loop)
       - RCSB Data API        → experiment_condition, starting_model,
-                               deposited_r_work, deposited_r_free
+                               deposited_r_work, deposited_r_free, ph,
+                               crystal_grow_temp, diffrn_temp
                                (absent from re-refined local CIFs)
     """
     pdb_id = cif_path.stem.removesuffix("_final")
@@ -215,6 +275,7 @@ def metadata_row(cif_path: Path) -> dict:
     entry = _fetch_rcsb_entry(pdb_id)
     _codes, _status, starting_model = resolve_starting_model(entry, pdb_id)
     deposited_r_work, deposited_r_free = resolve_deposited_r_factors(entry)
+    ph, crystal_grow_temp = resolve_crystal_grow(entry)
     if entry is not None:
         grow_blocks = entry.get("exptl_crystal_grow") or []
         grow_details = [
@@ -242,5 +303,8 @@ def metadata_row(cif_path: Path) -> dict:
         "num_water": num_water,
         "ligand_names": ligand_names,
         "experiment_condition": experiment_condition,
+        "ph": ph,
+        "crystal_grow_temp": crystal_grow_temp,
+        "diffrn_temp": resolve_diffrn_temp(entry),
         "starting_model": starting_model,
     }

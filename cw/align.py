@@ -16,12 +16,32 @@ import numpy as np
 
 from cw.io import load_protein, write_transformed_cif
 
+GAP_PENALTY = (-10, -1)
+
+
+def paired_alignment_trace(
+    seq_a: bseq.ProteinSequence, seq_b: bseq.ProteinSequence
+) -> np.ndarray:
+    """Global BLOSUM62 alignment of two protein sequences.
+
+    Returns the (n, 2) array of trace rows where neither sequence has a gap;
+    column 0 indexes seq_a, column 1 indexes seq_b. Terminal gaps are free, so
+    ragged termini (missing density) are not penalized.
+    """
+    matrix = bseq_align.SubstitutionMatrix.std_protein_matrix()
+    alignment = bseq_align.align_optimal(  # type: ignore
+        seq_a, seq_b, matrix, gap_penalty=GAP_PENALTY, terminal_penalty=False
+    )[0]
+    trace = alignment.trace
+    return trace[(trace[:, 0] != -1) & (trace[:, 1] != -1)]
+
 
 def get_ca_coords_and_sequence(protein: struc.AtomArray) -> tuple[np.ndarray, str]:
     """Extract Cα positions and one-letter sequence in matching order.
 
     Ported verbatim from align_pdbs.py::get_ca_coords_and_sequence.
     Non-standard residues without a known one-letter code are skipped.
+    All protein chains are concatenated (deliberate: superposition uses every Cα).
     """
     ca = protein[protein.atom_name == "CA"]
     coords, seq_chars = [], []
@@ -46,15 +66,9 @@ def get_paired_ca_positions(
     mob_coords, mob_seq_str = get_ca_coords_and_sequence(mobile)
     ref_coords, ref_seq_str = get_ca_coords_and_sequence(ref)
 
-    mob_seq = bseq.ProteinSequence(mob_seq_str)
-    ref_seq = bseq.ProteinSequence(ref_seq_str)
-
-    matrix = bseq_align.SubstitutionMatrix.std_protein_matrix()
-    alignments = bseq_align.align_optimal(  # type: ignore
-        mob_seq, ref_seq, matrix, gap_penalty=(-10, -1), terminal_penalty=False
+    paired = paired_alignment_trace(
+        bseq.ProteinSequence(mob_seq_str), bseq.ProteinSequence(ref_seq_str)
     )
-    trace = alignments[0].trace
-    paired = trace[(trace[:, 0] != -1) & (trace[:, 1] != -1)]
     return mob_coords[paired[:, 0]], ref_coords[paired[:, 1]], len(paired)
 
 

@@ -3,8 +3,9 @@
 Usage:
     uv run scripts/build_metadata.py <cohort.txt> [-o metadata.csv]
 
-Fetches experiment_condition and starting_model from the RCSB Data API;
-all other fields come from local mmCIF files.
+Fetches experiment_condition, starting_model, the deposited R-factors, and the
+crystallisation/data-collection conditions (ph, crystal_grow_temp, diffrn_temp)
+from the RCSB Data API; all other fields come from local mmCIF files.
 Writes to data/<cohort_id>/metadata.csv by default.
 """
 
