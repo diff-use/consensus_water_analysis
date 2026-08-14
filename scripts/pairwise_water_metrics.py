@@ -30,9 +30,11 @@ Four modes (purpose · command · where the output is viewed):
         notebooks/02_refinement_water_heatmaps.py (Section B).
 
   --partition — starting-model-bias decomposition: per off-diagonal pair, the cross-refinement's
-    recall of the shared / b_only / a_only / c_only water groups (see run_partition).
-      pairwise_water_metrics.py --partition --results-dir DIR [--variant V] [--no-filter]
-      → <results-dir parent>/starting_model_partition_<V>_<cutoff>.csv, viewed in
+    recall of the shared / b_only / a_only / c_only water groups (see run_partition). The groups
+    come from the two self-refinements, or from the deposited structures with --ref-dir, which
+    writes to a separate ..._deposited_... CSV.
+      pairwise_water_metrics.py --partition --results-dir DIR [--ref-dir DIR] [--variant V] [--no-filter]
+      → <results-dir parent>/starting_model_partition[_deposited]_<V>_<cutoff>.csv, viewed in
         experiments/starting_model_partition_recall.py (gitignored, local-only).
 
 Output paths: -o overrides only with a single --variant. Column schemas: FIELDNAMES
@@ -101,6 +103,9 @@ PARTITION_FIELDNAMES = [
     "n_pred_b",
     "n_pred_a_only",
     "n_pred_orphan",
+    "n_pred_near_shared",
+    "n_pred_near_b_only",
+    "n_pred_near_a_only",
 ]
 
 
@@ -453,17 +458,20 @@ def run_partition(args) -> None:
         a_only  — A's waters absent from B        (template-only; recall here = bias signal)
         c_only  — every unrelated C's waters absent from B, pooled (conserved-water chance floor;
                   a_only above c_only is bias above chance)
-    Recall is the only meaningful per-group metric (the predictor spans every group at once).
-    One CSV per variant."""
+    Each group also carries a precision numerator (n_pred_near_<group>), the predictor waters
+    within cutoff of it, so any of the three can be scored as a standalone ground truth against
+    the shared denominator n_pred. One CSV per variant."""
     results_dir: Path = args.results_dir
     if results_dir is None or not results_dir.is_dir():
         logger.error(f"--partition needs --results-dir pointing at a refinement_results tree: {results_dir}")
         sys.exit(1)
 
     out_dir = results_dir.parent
+    ref_dir: Path | None = args.ref_dir
     variants = [args.variant] if args.variant else discover_variants(results_dir)
     distance_filter = not args.no_filter
     logger.info(f"Results dir:  {results_dir}")
+    logger.info(f"Ground truth: {f'deposited {ref_dir}' if ref_dir else 'self-refined <x>_refined_by_<x>'}")
     logger.info(f"Variants:     {variants}")
     logger.info(f"Cutoff:       {args.cutoff} Å")
     logger.info(f"Water filter: {f'on (≤ {args.filter_cutoff} Å to protein)' if distance_filter else 'off'}")
@@ -475,12 +483,28 @@ def run_partition(args) -> None:
             continue
         ids = sorted(self_cifs)
 
-        # Self-refinements: cleaned CIF + water coords (own frame) + protein (alignment target).
+        # Ground truth for A and B: cleaned CIF + water coords (own frame) + protein (alignment
+        # target). By default the two self-refinements, which are variant-specific — the groups
+        # move when the protocol does. With --ref-dir the deposited structures stand in, holding
+        # the target fixed across protocols, so a per-pair auto/stripped difference is a pure
+        # predictor effect. Deposited CIFs are read as-is (already distance-filtered on disk);
+        # raw phenix output is cleaned and filtered on the fly.
         cleaned, coords = {}, {}
-        for structure in ids:
-            cleaned[structure], coords[structure] = clean_phenix_waters(
-                self_cifs[structure], structure, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
-            )
+        if ref_dir is None:
+            for structure in ids:
+                cleaned[structure], coords[structure] = clean_phenix_waters(
+                    self_cifs[structure], structure, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
+                )
+        else:
+            absent = [structure for structure in ids if not (ref_dir / f"{structure}.cif").exists()]
+            if absent:
+                logger.error(f"[{variant}] missing deposited reference CIFs under {ref_dir}: {absent}")
+                sys.exit(1)
+            for structure in ids:
+                cleaned[structure] = ref_dir / f"{structure}.cif"
+                coords[structure] = (
+                    load_structure_waters(cleaned[structure], pdb_id=structure)[["x", "y", "z"]].to_numpy()
+                )
         proteins = {structure: load_protein(cleaned[structure])[0] for structure in ids}
 
         # Cross-refinement predictors keyed by (starting_model, donor), off-diagonal only.
@@ -550,6 +574,16 @@ def run_partition(args) -> None:
             n_pred_a_only = int((pred_near_a & ~pred_near_b).sum())
             n_pred_orphan = int((~pred_near_a & ~pred_near_b).sum())
 
+            # Precision numerators against each of the three disjoint groups, so shared / b_only /
+            # a_only can each be scored as its own ground truth. These are NOT the composition
+            # counts above: n_pred_b lumps shared and b_only together, and n_pred_a_only excludes
+            # anything near B. Scoring against a group directly also lets one predictor water count
+            # for two groups — two ground-truth waters more than a cutoff apart can both be in
+            # range of it — so these three need not sum to n_pred.
+            n_pred_near_shared = int(_within_cutoff_mask(predictor_coords, shared, args.cutoff).sum())
+            n_pred_near_b_only = int(_within_cutoff_mask(predictor_coords, b_only, args.cutoff).sum())
+            n_pred_near_a_only = int(_within_cutoff_mask(predictor_coords, a_only, args.cutoff).sum())
+
             rows.append(
                 {
                     "reference": starting_model,
@@ -566,6 +600,9 @@ def run_partition(args) -> None:
                     "n_pred_b": n_pred_b,
                     "n_pred_a_only": n_pred_a_only,
                     "n_pred_orphan": n_pred_orphan,
+                    "n_pred_near_shared": n_pred_near_shared,
+                    "n_pred_near_b_only": n_pred_near_b_only,
+                    "n_pred_near_a_only": n_pred_near_a_only,
                 }
             )
             logger.info(
@@ -574,7 +611,8 @@ def run_partition(args) -> None:
                 f"a_only={recall_a_only:.2f} c_only={recall_c_only:.2f}"
             )
 
-        out_path = out_dir / f"starting_model_partition_{variant}_{args.cutoff}.csv"
+        _grounding = "_deposited" if ref_dir is not None else ""
+        out_path = out_dir / f"starting_model_partition{_grounding}_{variant}_{args.cutoff}.csv"
         _write_csv(out_path, PARTITION_FIELDNAMES, rows)
 
 
