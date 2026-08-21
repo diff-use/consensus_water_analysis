@@ -58,6 +58,7 @@ def _():
     import config
     from cw.metrics import (
         consensus_centers,
+        consensus_water_mask,
         pareto_front,
         per_structure_consensus_pr,
     )
@@ -67,6 +68,7 @@ def _():
         Path,
         config,
         consensus_centers,
+        consensus_water_mask,
         np,
         pareto_front,
         pd,
@@ -579,18 +581,14 @@ def _(mo):
 def _(
     CLUSTER_OCCUPANCY_CUTOFF,
     FILTERS,
+    consensus_water_mask,
     plt,
     sns,
     unfiltered_clusters,
     unfiltered_members,
 ):
     def build_quality_split_fig(members, clusters, cutoff, filters, *, fontsize=11):
-        conserved_ids = set(
-            clusters.loc[clusters["cluster_occupancy"] >= cutoff, "cluster_id"]
-        )
-        is_consensus = members["within_cutoff"] & members["cluster_id"].isin(
-            conserved_ids
-        )
+        is_consensus = consensus_water_mask(members, clusters, cutoff)
         labelled = members.assign(
             group=is_consensus.map({True: "consensus", False: "non-consensus"})
         )
