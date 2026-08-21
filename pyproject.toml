@@ -46,5 +46,11 @@ exclude = ["notebooks/"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
 
+[tool.ruff.lint.isort]
+# config.py is gitignored, so it is absent in CI and present locally. Without
+# this, isort classifies it as third-party in CI and first-party locally, and the
+# two disagree about import order.
+known-first-party = ["cw", "config"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
