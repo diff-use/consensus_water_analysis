@@ -18,6 +18,7 @@ dyad centroid. Two HEWL-specific choices differ from the carbonic-anhydrase scri
 
 Shared geometry / ligand primitives live in ``apo_holo_lib.py``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,8 +28,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))          # apo_holo_lib
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))   # config, cw
+sys.path.insert(0, str(Path(__file__).parent))  # apo_holo_lib
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # config, cw
 
 import apo_holo_lib as lib
 
@@ -44,11 +45,11 @@ DEFAULT_COHORT = Path("data/hewls_65.txt")
 # the 18-residue signal peptide, shifting the dyad to Glu53/Asp70. The first
 # scheme whose GLU and ASP are both present is used.
 CATALYTIC_SCHEMES = [
-    {("GLU", 35): ("OE1", "OE2"), ("ASP", 52): ("OD1", "OD2")},   # mature
-    {("GLU", 53): ("OE1", "OE2"), ("ASP", 70): ("OD1", "OD2")},   # precursor (+18)
+    {("GLU", 35): ("OE1", "OE2"), ("ASP", 52): ("OD1", "OD2")},  # mature
+    {("GLU", 53): ("OE1", "OE2"), ("ASP", 70): ("OD1", "OD2")},  # precursor (+18)
 ]
 
-SITE_CUTOFF = 6.0    # A: ligand-of-interest atom within this of the dyad -> holo
+SITE_CUTOFF = 6.0  # A: ligand-of-interest atom within this of the dyad -> holo
 CLEFT_CUTOFF = 10.0  # A: outer edge of the substrate cleft (breakdown only)
 
 # Sugars are deliberately NOT excluded here (they are the HEWL substrate analogs).
@@ -70,7 +71,8 @@ def rcsb_ligand_info(pdb_id: str) -> dict | None:
     info = entry.get("rcsb_entry_info") or {}
     bound = list(info.get("nonpolymer_bound_components") or [])
     of_interest = [
-        c for c in bound
+        c
+        for c in bound
         if c not in lib.WATER and c not in NON_LIGAND and c not in lib.MONATOMIC_IONS
     ]
     has_affinity = bool(entry.get("rcsb_binding_affinity"))
@@ -81,10 +83,10 @@ def rcsb_ligand_info(pdb_id: str) -> dict | None:
 @dataclass
 class Result:
     pdb_id: str
-    method: str                      # ok | no-dyad | missing
+    method: str  # ok | no-dyad | missing
     inventory: Counter = field(default_factory=Counter)  # all non-water het
-    ligands: list[str] = field(default_factory=list)     # ligands of interest
-    lig_dist: float | None = None    # nearest ligand-of-interest -> dyad
+    ligands: list[str] = field(default_factory=list)  # ligands of interest
+    lig_dist: float | None = None  # nearest ligand-of-interest -> dyad
     lig_comp: str | None = None
     rcsb_of_interest: list[str] = field(default_factory=list)
     rcsb_affinity: bool = False
@@ -128,8 +130,9 @@ def analyze(pdb_id: str, use_rcsb: bool) -> Result:
     else:
         comps = lib.ligands_of_interest(model, NON_LIGAND)
         dist, comp = lib.nearest_ligand(model, comps, anchor) if comps else (None, None)
-        r = Result(pdb_id, "ok", inventory=inventory, ligands=sorted(comps),
-                   lig_dist=dist, lig_comp=comp)
+        r = Result(
+            pdb_id, "ok", inventory=inventory, ligands=sorted(comps), lig_dist=dist, lig_comp=comp
+        )
 
     if use_rcsb:
         rcsb = rcsb_ligand_info(pdb_id)
@@ -173,8 +176,10 @@ def report(results: list[Result], use_rcsb: bool):
     if holo:
         print("--- HOLO structures ---")
         for r in sorted(holo, key=lambda r: r.lig_dist):
-            print(f"  {r.pdb_id}  {r.lig_comp:<4} @ {r.lig_dist:.2f} A   "
-                  f"(all LOI: {'|'.join(r.ligands)})")
+            print(
+                f"  {r.pdb_id}  {r.lig_comp:<4} @ {r.lig_dist:.2f} A   "
+                f"(all LOI: {'|'.join(r.ligands)})"
+            )
         print()
 
     peripheral = [r for r in usable if not r.holo_local and r.ligands]
@@ -199,31 +204,57 @@ def report(results: list[Result], use_rcsb: bool):
 def write_csv(results: list[Result], path: Path):
     with path.open("w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow([
-            "pdb_id", "call", "method", "all_het", "ligands_of_interest",
-            "lig_dist", "lig_comp", "holo_local",
-            "rcsb_of_interest", "rcsb_has_affinity", "rcsb_holo", "disagree",
-        ])
+        w.writerow(
+            [
+                "pdb_id",
+                "call",
+                "method",
+                "all_het",
+                "ligands_of_interest",
+                "lig_dist",
+                "lig_comp",
+                "holo_local",
+                "rcsb_of_interest",
+                "rcsb_has_affinity",
+                "rcsb_holo",
+                "disagree",
+            ]
+        )
         for r in results:
             all_het = "|".join(f"{c}:{n}" for c, n in sorted(r.inventory.items()))
-            w.writerow([
-                r.pdb_id, r.call, r.method, all_het, "|".join(r.ligands),
-                f"{r.lig_dist:.3f}" if r.lig_dist is not None else "",
-                r.lig_comp or "", int(r.holo_local),
-                "|".join(r.rcsb_of_interest), int(r.rcsb_affinity),
-                int(r.rcsb_holo), int(r.disagree),
-            ])
+            w.writerow(
+                [
+                    r.pdb_id,
+                    r.call,
+                    r.method,
+                    all_het,
+                    "|".join(r.ligands),
+                    f"{r.lig_dist:.3f}" if r.lig_dist is not None else "",
+                    r.lig_comp or "",
+                    int(r.holo_local),
+                    "|".join(r.rcsb_of_interest),
+                    int(r.rcsb_affinity),
+                    int(r.rcsb_holo),
+                    int(r.disagree),
+                ]
+            )
     print(f"wrote {len(results)} rows -> {path}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cohort", type=Path, default=DEFAULT_COHORT,
-                    help=f"cohort .txt (default: {DEFAULT_COHORT})")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--cohort",
+        type=Path,
+        default=DEFAULT_COHORT,
+        help=f"cohort .txt (default: {DEFAULT_COHORT})",
+    )
     ap.add_argument("--csv", type=Path, help="write per-structure rows to this CSV")
-    ap.add_argument("--no-rcsb", action="store_true",
-                    help="skip the RCSB ligand-of-interest cross-check")
+    ap.add_argument(
+        "--no-rcsb", action="store_true", help="skip the RCSB ligand-of-interest cross-check"
+    )
     args = ap.parse_args()
 
     use_rcsb = not args.no_rcsb

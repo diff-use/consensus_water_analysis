@@ -21,6 +21,7 @@ never ligands-of-interest; their distance to the anchor is reported separately.
 
 Shared geometry / ligand primitives live in ``apo_holo_lib.py``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,8 +31,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))          # apo_holo_lib
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))   # config, cw
+sys.path.insert(0, str(Path(__file__).parent))  # apo_holo_lib
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # config, cw
 
 import apo_holo_lib as lib
 import gemmi
@@ -42,17 +43,30 @@ from cw.io import cif_path_for, read_cohort
 # --- configuration ---------------------------------------------------------
 DEFAULT_COHORT = Path("data/C000602.txt")
 
-CATALYTIC_SEQID = 106      # DJ-1 nucleophile, mature numbering (chain is 1-188)
-SITE_CUTOFF = 6.0          # A: non-covalent ligand atom within this of Cb106 -> holo
-PERIPHERAL_CUTOFF = 12.0   # A: outer edge of the active-site pocket (breakdown only)
-METAL_CUTOFF = 6.0         # A: metal within this of Cb106 -> site metal
+CATALYTIC_SEQID = 106  # DJ-1 nucleophile, mature numbering (chain is 1-188)
+SITE_CUTOFF = 6.0  # A: non-covalent ligand atom within this of Cb106 -> holo
+PERIPHERAL_CUTOFF = 12.0  # A: outer edge of the active-site pocket (breakdown only)
+METAL_CUTOFF = 6.0  # A: metal within this of Cb106 -> site metal
 
 # Cys106 states that are chemical modifications of the cysteine, not bound
 # compounds: oxidation ladder (sulfenic / sulfinic / sulfonic), S-nitrosylation,
 # and the iodoacetate/iodoacetamide reagent adducts.
 CYS_MODIFICATIONS = {
-    "CSO", "CSD", "CSX", "OCS", "CSW", "CSS", "CSU", "CAS", "YCM",
-    "SNC", "CME", "CMT", "CCS", "SCY", "CSA",
+    "CSO",
+    "CSD",
+    "CSX",
+    "OCS",
+    "CSW",
+    "CSS",
+    "CSU",
+    "CAS",
+    "YCM",
+    "SNC",
+    "CME",
+    "CMT",
+    "CCS",
+    "SCY",
+    "CSA",
 }
 
 NON_LIGAND = lib.ADDITIVES | lib.COFACTORS | lib.HEAVY_ATOM_REAGENTS
@@ -135,16 +149,16 @@ def nearest_het(model, anchor, skip: set[str]):
 @dataclass
 class Result:
     pdb_id: str
-    method: str                      # ok | no-cys106 | missing
-    res106: str = ""                 # comp_id at seqid 106
-    state106: str = ""               # reduced | modified | mutant | covalent-ligand
+    method: str  # ok | no-cys106 | missing
+    res106: str = ""  # comp_id at seqid 106
+    state106: str = ""  # reduced | modified | mutant | covalent-ligand
     inventory: Counter = field(default_factory=Counter)  # all non-water het
-    ligands: list[str] = field(default_factory=list)     # non-covalent ligands of interest
-    lig_dist: float | None = None    # nearest non-covalent ligand -> Cb106
+    ligands: list[str] = field(default_factory=list)  # non-covalent ligands of interest
+    lig_dist: float | None = None  # nearest non-covalent ligand -> Cb106
     lig_comp: str | None = None
     metal_dist: float | None = None
     metal_name: str | None = None
-    het_dist: float | None = None     # nearest het of any kind (additives, ions) -> Cb106
+    het_dist: float | None = None  # nearest het of any kind (additives, ions) -> Cb106
     het_comp: str | None = None
 
     @property
@@ -196,10 +210,20 @@ def analyze(pdb_id: str) -> Result:
     dist, comp = lib.nearest_ligand(model, comps, anchor) if comps else (None, None)
     metal_dist, metal_name = nearest_metal(model, anchor)
     het_dist, het_comp = nearest_het(model, anchor, skip={res.name})
-    return Result(pdb_id, "ok", res106=res.name, state106=state, inventory=inventory,
-                  ligands=sorted(comps), lig_dist=dist, lig_comp=comp,
-                  metal_dist=metal_dist, metal_name=metal_name,
-                  het_dist=het_dist, het_comp=het_comp)
+    return Result(
+        pdb_id,
+        "ok",
+        res106=res.name,
+        state106=state,
+        inventory=inventory,
+        ligands=sorted(comps),
+        lig_dist=dist,
+        lig_comp=comp,
+        metal_dist=metal_dist,
+        metal_name=metal_name,
+        het_dist=het_dist,
+        het_comp=het_comp,
+    )
 
 
 # --- reporting -------------------------------------------------------------
@@ -211,8 +235,10 @@ def report(results: list[Result]):
     print(f"  analyzed (ok)    : {len(usable)}")
     print(f"  no Cys106        : {calls['no-cys106']}   missing: {calls['missing']}")
     print()
-    print(f"--- Call (holo = ligand of interest <= {SITE_CUTOFF:g} A of Cb106, "
-          f"or covalent at 106) ---")
+    print(
+        f"--- Call (holo = ligand of interest <= {SITE_CUTOFF:g} A of Cb106, "
+        f"or covalent at 106) ---"
+    )
     print(f"  APO                      : {calls['apo']}")
     print(f"  APO (peripheral ligand)  : {calls['apo-peripheral-ligand']}")
     print(f"  HOLO (non-covalent)      : {calls['holo']}")
@@ -220,9 +246,11 @@ def report(results: list[Result]):
     print()
 
     print("  nearest non-covalent ligand-to-Cb106 distance breakdown:")
-    buckets = [(0.0, SITE_CUTOFF, f"<={SITE_CUTOFF:g} active site"),
-               (SITE_CUTOFF, PERIPHERAL_CUTOFF, f"{SITE_CUTOFF:g}-{PERIPHERAL_CUTOFF:g} pocket edge"),
-               (PERIPHERAL_CUTOFF, float("inf"), f">{PERIPHERAL_CUTOFF:g} surface")]
+    buckets = [
+        (0.0, SITE_CUTOFF, f"<={SITE_CUTOFF:g} active site"),
+        (SITE_CUTOFF, PERIPHERAL_CUTOFF, f"{SITE_CUTOFF:g}-{PERIPHERAL_CUTOFF:g} pocket edge"),
+        (PERIPHERAL_CUTOFF, float("inf"), f">{PERIPHERAL_CUTOFF:g} surface"),
+    ]
     for lo, hi, name in buckets:
         sel = [r for r in usable if r.lig_dist is not None and lo < r.lig_dist <= hi]
         print(f"     {name:<24}{len(sel):>6}")
@@ -255,9 +283,13 @@ def report(results: list[Result]):
     print()
 
     apo_with_het = [r for r in usable if r.call.startswith("apo") and r.site_het]
-    print(f"--- Apo structures whose site is occupied by a non-ligand het "
-          f"(<= {SITE_CUTOFF:g} A of Cb106) ---")
-    print(f"  {len(apo_with_het)} of {sum(r.call.startswith('apo') for r in usable)} apo structures")
+    print(
+        f"--- Apo structures whose site is occupied by a non-ligand het "
+        f"(<= {SITE_CUTOFF:g} A of Cb106) ---"
+    )
+    print(
+        f"  {len(apo_with_het)} of {sum(r.call.startswith('apo') for r in usable)} apo structures"
+    )
     for r in sorted(apo_with_het, key=lambda r: r.het_dist):
         print(f"     {r.pdb_id}  {r.het_comp} at {r.het_dist:.2f} A   ({r.call}, 106={r.res106})")
     print()
@@ -281,31 +313,61 @@ def report(results: list[Result]):
 def write_csv(results: list[Result], path: Path):
     with path.open("w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow([
-            "pdb_id", "call", "method", "res106", "state106", "all_het",
-            "ligands_of_interest", "lig_dist", "lig_comp", "metal_dist", "metal_name",
-            "site_metal", "het_dist", "het_comp", "site_het", "holo",
-        ])
+        w.writerow(
+            [
+                "pdb_id",
+                "call",
+                "method",
+                "res106",
+                "state106",
+                "all_het",
+                "ligands_of_interest",
+                "lig_dist",
+                "lig_comp",
+                "metal_dist",
+                "metal_name",
+                "site_metal",
+                "het_dist",
+                "het_comp",
+                "site_het",
+                "holo",
+            ]
+        )
         for r in results:
             all_het = "|".join(f"{c}:{n}" for c, n in sorted(r.inventory.items()))
-            w.writerow([
-                r.pdb_id, r.call, r.method, r.res106, r.state106, all_het,
-                "|".join(r.ligands),
-                f"{r.lig_dist:.3f}" if r.lig_dist is not None else "",
-                r.lig_comp or "",
-                f"{r.metal_dist:.3f}" if r.metal_dist is not None else "",
-                r.metal_name or "", int(r.site_metal),
-                f"{r.het_dist:.3f}" if r.het_dist is not None else "",
-                r.het_comp or "", int(r.site_het), int(r.holo),
-            ])
+            w.writerow(
+                [
+                    r.pdb_id,
+                    r.call,
+                    r.method,
+                    r.res106,
+                    r.state106,
+                    all_het,
+                    "|".join(r.ligands),
+                    f"{r.lig_dist:.3f}" if r.lig_dist is not None else "",
+                    r.lig_comp or "",
+                    f"{r.metal_dist:.3f}" if r.metal_dist is not None else "",
+                    r.metal_name or "",
+                    int(r.site_metal),
+                    f"{r.het_dist:.3f}" if r.het_dist is not None else "",
+                    r.het_comp or "",
+                    int(r.site_het),
+                    int(r.holo),
+                ]
+            )
     print(f"wrote {len(results)} rows -> {path}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cohort", type=Path, default=DEFAULT_COHORT,
-                    help=f"cohort .txt (default: {DEFAULT_COHORT})")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--cohort",
+        type=Path,
+        default=DEFAULT_COHORT,
+        help=f"cohort .txt (default: {DEFAULT_COHORT})",
+    )
     ap.add_argument("--csv", type=Path, help="write per-structure rows to this CSV")
     args = ap.parse_args()
 

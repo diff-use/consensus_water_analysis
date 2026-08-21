@@ -154,8 +154,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     results = Parallel(n_jobs=args.jobs, return_as="generator_unordered")(
-        delayed(_align_one)(m, cif_paths[m], out_dir / f"{m}.cif", ref_cif)
-        for m in found
+        delayed(_align_one)(m, cif_paths[m], out_dir / f"{m}.cif", ref_cif) for m in found
     )
 
     rows, skipped, errors = [], [], []

@@ -17,9 +17,7 @@ _PDB_CODE_RE = re.compile(r"\b([0-9][A-Za-z0-9]{3})\b")
 def _pdb_codes(values: list[str]) -> list[str]:
     """Lowercased PDB codes found in free-text starting-model strings, de-duped in order."""
     return list(
-        dict.fromkeys(
-            code.lower() for v in values if v for code in _PDB_CODE_RE.findall(v)
-        )
+        dict.fromkeys(code.lower() for v in values if v for code in _PDB_CODE_RE.findall(v))
     )
 
 
@@ -115,9 +113,7 @@ def resolve_starting_model(entry: dict | None, pdb_id: str = "?") -> tuple[list[
 
     refine_codes = _pdb_codes(refine_raw)
     accession_codes = _pdb_codes(accession_raw)
-    conflict = bool(
-        refine_codes and accession_codes and set(refine_codes) != set(accession_codes)
-    )
+    conflict = bool(refine_codes and accession_codes and set(refine_codes) != set(accession_codes))
     if conflict:
         logger.warning(
             f"{pdb_id}: starting model disagreement — "
@@ -152,6 +148,7 @@ def resolve_deposited_r_factors(entry: dict | None) -> tuple[float | str, float 
     ``r_work`` / ``r_free`` read out of the on-disk CIF. Returns the first parseable
     value across ``refine`` blocks for each factor, else ``'<missing>'``.
     """
+
     def _first(key: str) -> float | str:
         for r in entry.get("refine") or []:
             v = r.get(key)

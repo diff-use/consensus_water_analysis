@@ -14,6 +14,7 @@ shared additive / cofactor / cryo sets is filtered out.
 
 Shared geometry / ligand primitives live in ``apo_holo_lib.py``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,8 +24,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))          # apo_holo_lib
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))   # config, cw
+sys.path.insert(0, str(Path(__file__).parent))  # apo_holo_lib
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # config, cw
 
 import apo_holo_lib as lib
 
@@ -40,7 +41,7 @@ CATALYTIC_SCHEMES = [
     {("ASP", 35): ("OD1", "OD2"), ("ASP", 219): ("OD1", "OD2")},
 ]
 
-SITE_CUTOFF = 6.0    # A: ligand-of-interest atom within this of the dyad -> holo
+SITE_CUTOFF = 6.0  # A: ligand-of-interest atom within this of the dyad -> holo
 CLEFT_CUTOFF = 10.0  # A: outer edge of the substrate cleft (breakdown only)
 
 NON_LIGAND = lib.ADDITIVES | lib.COFACTORS | lib.HEAVY_ATOM_REAGENTS
@@ -54,10 +55,10 @@ def catalytic_anchor(model):
 @dataclass
 class Result:
     pdb_id: str
-    method: str                      # ok | no-dyad | missing
+    method: str  # ok | no-dyad | missing
     inventory: Counter = field(default_factory=Counter)  # all non-water het
-    ligands: list[str] = field(default_factory=list)     # ligands of interest
-    lig_dist: float | None = None    # nearest ligand-of-interest -> dyad
+    ligands: list[str] = field(default_factory=list)  # ligands of interest
+    lig_dist: float | None = None  # nearest ligand-of-interest -> dyad
     lig_comp: str | None = None
 
     @property
@@ -88,8 +89,9 @@ def analyze(pdb_id: str) -> Result:
 
     comps = lib.ligands_of_interest(model, NON_LIGAND)
     dist, comp = lib.nearest_ligand(model, comps, anchor) if comps else (None, None)
-    return Result(pdb_id, "ok", inventory=inventory, ligands=sorted(comps),
-                  lig_dist=dist, lig_comp=comp)
+    return Result(
+        pdb_id, "ok", inventory=inventory, ligands=sorted(comps), lig_dist=dist, lig_comp=comp
+    )
 
 
 # --- reporting -------------------------------------------------------------
@@ -108,9 +110,11 @@ def report(results: list[Result]):
     print()
 
     print("  nearest ligand-to-dyad distance breakdown:")
-    buckets = [(0.0, SITE_CUTOFF, f"<={SITE_CUTOFF:g} active site"),
-               (SITE_CUTOFF, CLEFT_CUTOFF, f"{SITE_CUTOFF:g}-{CLEFT_CUTOFF:g} cleft edge"),
-               (CLEFT_CUTOFF, float("inf"), f">{CLEFT_CUTOFF:g} surface")]
+    buckets = [
+        (0.0, SITE_CUTOFF, f"<={SITE_CUTOFF:g} active site"),
+        (SITE_CUTOFF, CLEFT_CUTOFF, f"{SITE_CUTOFF:g}-{CLEFT_CUTOFF:g} cleft edge"),
+        (CLEFT_CUTOFF, float("inf"), f">{CLEFT_CUTOFF:g} surface"),
+    ]
     for lo, hi, name in buckets:
         sel = [r for r in usable if r.lig_dist is not None and lo < r.lig_dist <= hi]
         print(f"     {name:<22}{len(sel):>6}")
@@ -135,25 +139,45 @@ def report(results: list[Result]):
 def write_csv(results: list[Result], path: Path):
     with path.open("w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow([
-            "pdb_id", "call", "method", "all_het", "ligands_of_interest",
-            "lig_dist", "lig_comp", "holo",
-        ])
+        w.writerow(
+            [
+                "pdb_id",
+                "call",
+                "method",
+                "all_het",
+                "ligands_of_interest",
+                "lig_dist",
+                "lig_comp",
+                "holo",
+            ]
+        )
         for r in results:
             all_het = "|".join(f"{c}:{n}" for c, n in sorted(r.inventory.items()))
-            w.writerow([
-                r.pdb_id, r.call, r.method, all_het, "|".join(r.ligands),
-                f"{r.lig_dist:.3f}" if r.lig_dist is not None else "",
-                r.lig_comp or "", int(r.holo),
-            ])
+            w.writerow(
+                [
+                    r.pdb_id,
+                    r.call,
+                    r.method,
+                    all_het,
+                    "|".join(r.ligands),
+                    f"{r.lig_dist:.3f}" if r.lig_dist is not None else "",
+                    r.lig_comp or "",
+                    int(r.holo),
+                ]
+            )
     print(f"wrote {len(results)} rows -> {path}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cohort", type=Path, default=DEFAULT_COHORT,
-                    help=f"cohort .txt (default: {DEFAULT_COHORT})")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--cohort",
+        type=Path,
+        default=DEFAULT_COHORT,
+        help=f"cohort .txt (default: {DEFAULT_COHORT})",
+    )
     ap.add_argument("--csv", type=Path, help="write per-structure rows to this CSV")
     args = ap.parse_args()
 

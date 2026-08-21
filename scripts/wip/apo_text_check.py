@@ -32,6 +32,7 @@ Usage:
     uv run scripts/wip/apo_text_check.py <apo_holo.csv> [--calls apo,apo-peripheral-ligand]
                                          [--csv out.csv]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,7 +42,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))   # config, cw
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # config, cw
 
 import pandas as pd
 
@@ -58,29 +59,63 @@ from cw.metadata import _fetch_rcsb_entry
 # not the entry, so a campaign titled "…inhibitors of X" would flag its own apo
 # reference. Both are recorded for review but neither sets the verdict.
 LIGAND_PATTERNS = [
-    r"\bin complex with\b", r"\bcomplex(?:ed|es)?\b", r"\bbound\b", r"\bbinding\b",
-    r"\bligand(?:ed)?\b", r"\binhibitor\b", r"\bsubstrate\b", r"\bco-?crystal\w*\b",
-    r"\bsoak(?:ed|ing)?\b", r"\bbacksoak\w*\b", r"\bfragment\b", r"\badduct\b",
-    r"\bcovalent(?:ly)?\b", r"\bconjugat\w*\b", r"\bholo\b", r"\bcompound \w+\b",
-    r"\bmodifier\b", r"\bmixing with\b", r"\bmixed with\b", r"\bincubated with\b",
-    r"\bmodification\b", r"\breacted with\b", r"\btreated with\b",
+    r"\bin complex with\b",
+    r"\bcomplex(?:ed|es)?\b",
+    r"\bbound\b",
+    r"\bbinding\b",
+    r"\bligand(?:ed)?\b",
+    r"\binhibitor\b",
+    r"\bsubstrate\b",
+    r"\bco-?crystal\w*\b",
+    r"\bsoak(?:ed|ing)?\b",
+    r"\bbacksoak\w*\b",
+    r"\bfragment\b",
+    r"\badduct\b",
+    r"\bcovalent(?:ly)?\b",
+    r"\bconjugat\w*\b",
+    r"\bholo\b",
+    r"\bcompound \w+\b",
+    r"\bmodifier\b",
+    r"\bmixing with\b",
+    r"\bmixed with\b",
+    r"\bincubated with\b",
+    r"\bmodification\b",
+    r"\breacted with\b",
+    r"\btreated with\b",
 ]
 
 # Explicit statements that the entry is ligand-free.
 APO_PATTERNS = [
-    r"\bapo\b", r"\bapo-?form\b", r"\bunbound\b", r"\bunliganded\b",
-    r"\bligand-?free\b", r"\bfree enzyme\b", r"\bunmodified\b", r"\breduced form\b",
-    r"\bno mixing\b", r"\bwithout ligand\b", r"\bnative\b",
+    r"\bapo\b",
+    r"\bapo-?form\b",
+    r"\bunbound\b",
+    r"\bunliganded\b",
+    r"\bligand-?free\b",
+    r"\bfree enzyme\b",
+    r"\bunmodified\b",
+    r"\breduced form\b",
+    r"\bno mixing\b",
+    r"\bwithout ligand\b",
+    r"\bnative\b",
 ]
 
 # Soak language specific to the crystallization protocol.
-SOAK_PATTERNS = [r"\bsoak(?:ed|ing)?\b", r"\bco-?crystalli[sz]", r"\bincubat\w*\b",
-                 r"\bmm compound\b", r"\bdmso stock\b", r"\btitrat\w*\b"]
+SOAK_PATTERNS = [
+    r"\bsoak(?:ed|ing)?\b",
+    r"\bco-?crystalli[sz]",
+    r"\bincubat\w*\b",
+    r"\bmm compound\b",
+    r"\bdmso stock\b",
+    r"\btitrat\w*\b",
+]
 
 # Crystallization additives that are not evidence of a ligand soak, so their
 # presence in the details string must not trip the soak scan.
-BENIGN_SOAK_CONTEXT = re.compile(r"\bsoak\w*\s+(?:in|with)\s+(?:cryo|paraton|paratone|oil|"
-                                 r"glycerol|peg|liquid nitrogen)", re.I)
+BENIGN_SOAK_CONTEXT = re.compile(
+    r"\bsoak\w*\s+(?:in|with)\s+(?:cryo|paraton|paratone|oil|"
+    r"glycerol|peg|liquid nitrogen)",
+    re.I,
+)
 
 
 def matches(text: str, patterns: list[str]) -> list[str]:
@@ -105,7 +140,7 @@ class Check:
     apo_terms: list[str] = field(default_factory=list)
     soak_terms: list[str] = field(default_factory=list)
     citation_terms: list[str] = field(default_factory=list)  # informational only
-    site_het: str = ""            # "COMP at d A" from the apo/holo CSV, if present
+    site_het: str = ""  # "COMP at d A" from the apo/holo CSV, if present
     fetched: bool = True
 
     @property
@@ -167,8 +202,14 @@ def check(pdb_id: str, call: str, all_het: object, site_het: str = "") -> Check:
 
     grow_for_scan = "" if BENIGN_SOAK_CONTEXT.search(crystal_grow) else crystal_grow
     return Check(
-        pdb_id, call, title=title, keywords=keywords, citation=citation,
-        crystal_grow=crystal_grow, rcsb_bound=rcsb_bound, unmodelled_bound=unmodelled,
+        pdb_id,
+        call,
+        title=title,
+        keywords=keywords,
+        citation=citation,
+        crystal_grow=crystal_grow,
+        rcsb_bound=rcsb_bound,
+        unmodelled_bound=unmodelled,
         site_het=site_het,
         affinity=bool(entry.get("rcsb_binding_affinity")),
         ligand_terms=matches(title, LIGAND_PATTERNS),
@@ -218,29 +259,42 @@ def report(checks: list[Check]) -> None:
 
 
 def write_csv(checks: list[Check], path: Path) -> None:
-    pd.DataFrame([
-        {
-            "pdb_id": c.pdb_id, "call": c.call, "verdict": c.verdict,
-            "flags": "|".join(c.flags), "title": c.title, "keywords": c.keywords,
-            "citation_title": c.citation, "crystal_grow": c.crystal_grow,
-            "ligand_terms": "|".join(c.ligand_terms), "apo_terms": "|".join(c.apo_terms),
-            "soak_terms": "|".join(c.soak_terms),
-            "citation_terms": "|".join(c.citation_terms), "site_het": c.site_het,
-            "rcsb_bound_components": "|".join(c.rcsb_bound),
-            "unmodelled_bound": "|".join(c.unmodelled_bound),
-            "affinity_data": int(c.affinity),
-        }
-        for c in checks
-    ]).to_csv(path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "pdb_id": c.pdb_id,
+                "call": c.call,
+                "verdict": c.verdict,
+                "flags": "|".join(c.flags),
+                "title": c.title,
+                "keywords": c.keywords,
+                "citation_title": c.citation,
+                "crystal_grow": c.crystal_grow,
+                "ligand_terms": "|".join(c.ligand_terms),
+                "apo_terms": "|".join(c.apo_terms),
+                "soak_terms": "|".join(c.soak_terms),
+                "citation_terms": "|".join(c.citation_terms),
+                "site_het": c.site_het,
+                "rcsb_bound_components": "|".join(c.rcsb_bound),
+                "unmodelled_bound": "|".join(c.unmodelled_bound),
+                "affinity_data": int(c.affinity),
+            }
+            for c in checks
+        ]
+    ).to_csv(path, index=False)
     print(f"wrote {len(checks)} rows -> {path}")
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("apo_holo", type=Path, help="apo_holo.csv from an apo_holo_*.py run")
-    ap.add_argument("--calls", default="apo,apo-peripheral-ligand",
-                    help="comma-separated calls to check (default: %(default)s)")
+    ap.add_argument(
+        "--calls",
+        default="apo,apo-peripheral-ligand",
+        help="comma-separated calls to check (default: %(default)s)",
+    )
     ap.add_argument("--csv", type=Path, help="write per-structure rows to this CSV")
     args = ap.parse_args()
 
@@ -254,9 +308,14 @@ def main() -> None:
     has_site_het = {"het_comp", "het_dist", "site_het"} <= set(subset.columns)
     checks = [
         check(
-            row.pdb_id, row.call, row.all_het,
-            site_het=(f"{row.het_comp} at {row.het_dist:.2f} A"
-                      if has_site_het and row.site_het and isinstance(row.het_comp, str) else ""),
+            row.pdb_id,
+            row.call,
+            row.all_het,
+            site_het=(
+                f"{row.het_comp} at {row.het_dist:.2f} A"
+                if has_site_het and row.site_het and isinstance(row.het_comp, str)
+                else ""
+            ),
         )
         for row in subset.itertuples()
     ]

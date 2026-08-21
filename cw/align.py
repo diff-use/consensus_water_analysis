@@ -19,9 +19,7 @@ from cw.io import load_protein, write_transformed_cif
 GAP_PENALTY = (-10, -1)
 
 
-def paired_alignment_trace(
-    seq_a: bseq.ProteinSequence, seq_b: bseq.ProteinSequence
-) -> np.ndarray:
+def paired_alignment_trace(seq_a: bseq.ProteinSequence, seq_b: bseq.ProteinSequence) -> np.ndarray:
     """Global BLOSUM62 alignment of two protein sequences.
 
     Returns the (n, 2) array of trace rows where neither sequence has a gap;

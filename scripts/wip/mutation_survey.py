@@ -51,7 +51,9 @@ def extract_sequence(cif_path: Path) -> tuple[str, list[int], int]:
     Assumes one protein chain: all chains are concatenated, so with >1 chain the
     reported positions merge chains and become ambiguous (caller warns).
     """
-    protein, offset = load_protein(cif_path)  # highest-occupancy altloc; res_ids shifted to start at 1
+    protein, offset = load_protein(
+        cif_path
+    )  # highest-occupancy altloc; res_ids shifted to start at 1
     c_alpha = protein[protein.atom_name == "CA"]
     if c_alpha.array_length() == 0:
         raise ValueError("no CA atoms")
@@ -188,8 +190,10 @@ def report_identity(table: pd.DataFrame, identity_cutoff: float) -> None:
     print(f"  sequence-distinct group (identity <{identity_cutoff:.0%}): {len(distinct)}")
     if len(distinct):
         examples = ", ".join(distinct.sort_values("identity").pdb_id.head(6))
-        print(f"  distinct identity range: {distinct.identity.min():.2f}-"
-              f"{distinct.identity.max():.2f}  (e.g. {examples})")
+        print(
+            f"  distinct identity range: {distinct.identity.min():.2f}-"
+            f"{distinct.identity.max():.2f}  (e.g. {examples})"
+        )
 
 
 def report_distribution(mutant_group: pd.DataFrame) -> None:
@@ -198,11 +202,15 @@ def report_distribution(mutant_group: pd.DataFrame) -> None:
         print(f"  {count:2d} sub: {n:4d}  {'#' * min(int(n), 80)}")
     n_wild_type = int((mutant_group.n_substitutions == 0).sum())
     total = len(mutant_group)
-    print(f"\n  mean={mutant_group.n_substitutions.mean():.2f}  "
-          f"median={mutant_group.n_substitutions.median():.0f}  "
-          f"max={mutant_group.n_substitutions.max()}")
-    print(f"  wild-type (0 sub): {n_wild_type} ({100 * n_wild_type / total:.1f}%)  "
-          f"engineered (>=1): {total - n_wild_type} ({100 * (total - n_wild_type) / total:.1f}%)")
+    print(
+        f"\n  mean={mutant_group.n_substitutions.mean():.2f}  "
+        f"median={mutant_group.n_substitutions.median():.0f}  "
+        f"max={mutant_group.n_substitutions.max()}"
+    )
+    print(
+        f"  wild-type (0 sub): {n_wild_type} ({100 * n_wild_type / total:.1f}%)  "
+        f"engineered (>=1): {total - n_wild_type} ({100 * (total - n_wild_type) / total:.1f}%)"
+    )
 
 
 def report_signatures(mutant_group: pd.DataFrame, limit: int = 10) -> None:
@@ -223,16 +231,32 @@ def report_hotspots(hotspots: pd.DataFrame, limit: int = 25) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Survey sequence mutations across a cohort.")
     parser.add_argument("cohort", type=Path, help="Cohort .txt file (one PDB ID per line)")
-    parser.add_argument("--reference", required=True,
-                        help="Reference PDB ID (need not be a cohort member; if absent "
-                             "from the cohort it is loaded directly and not counted)")
-    parser.add_argument("--identity-cutoff", type=float, default=0.90,
-                        help="Members below this identity are reported as sequence-distinct")
-    parser.add_argument("--min-coverage", type=float, default=0.80,
-                        help="Structures whose alignment covers less than this fraction of "
-                             "the reference are excluded (their identity is unreliable)")
-    parser.add_argument("-o", "--output-dir", type=Path, default=None,
-                        help="Output directory (default: config.DATA_DIR/<cohort_id>)")
+    parser.add_argument(
+        "--reference",
+        required=True,
+        help="Reference PDB ID (need not be a cohort member; if absent "
+        "from the cohort it is loaded directly and not counted)",
+    )
+    parser.add_argument(
+        "--identity-cutoff",
+        type=float,
+        default=0.90,
+        help="Members below this identity are reported as sequence-distinct",
+    )
+    parser.add_argument(
+        "--min-coverage",
+        type=float,
+        default=0.80,
+        help="Structures whose alignment covers less than this fraction of "
+        "the reference are excluded (their identity is unreliable)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Output directory (default: config.DATA_DIR/<cohort_id>)",
+    )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", action="store_true", help="Show debug output")
     verbosity.add_argument("--quiet", action="store_true", help="Show warnings and errors only")
@@ -265,9 +289,13 @@ def main() -> None:
     for member_id, reason in failed:
         logger.warning(f"  {member_id}: {reason}")
     if multichain:
-        listed = ", ".join(multichain[:10]) + (f" (+{len(multichain) - 10} more)" if len(multichain) > 10 else "")
-        logger.warning(f"{len(multichain)} structure(s) have >1 protein chain; chains are "
-                       f"concatenated so reported positions may be ambiguous: {listed}")
+        listed = ", ".join(multichain[:10]) + (
+            f" (+{len(multichain) - 10} more)" if len(multichain) > 10 else ""
+        )
+        logger.warning(
+            f"{len(multichain)} structure(s) have >1 protein chain; chains are "
+            f"concatenated so reported positions may be ambiguous: {listed}"
+        )
     if not sequences:
         logger.error("No sequences parsed; nothing to survey.")
         sys.exit(1)
@@ -293,29 +321,40 @@ def main() -> None:
             logger.error(f"Failed to parse reference {reference_id!r}: {exc}")
             sys.exit(1)
         if ref_chains > 1:
-            logger.warning(f"Reference {reference_id!r} has >1 protein chain; "
-                           f"reported positions may be ambiguous.")
-    logger.info(f"Reference: {reference_id} "
-                f"({len(reference_sequence)} residues, "
-                f"auth_seq_id {min(reference_ids)}-{max(reference_ids)})")
+            logger.warning(
+                f"Reference {reference_id!r} has >1 protein chain; "
+                f"reported positions may be ambiguous."
+            )
+    logger.info(
+        f"Reference: {reference_id} "
+        f"({len(reference_sequence)} residues, "
+        f"auth_seq_id {min(reference_ids)}-{max(reference_ids)})"
+    )
 
     # The reference anchors the alignment; it is never a surveyed data point, so
     # a self-comparison (0 substitutions) does not pollute the distributions.
     members = {m: s for m, s in sequences.items() if m != reference_id}
     table, substitutions_by_structure = survey(members, reference_sequence, reference_ids)
 
-    logger.info(f"Coverage vs reference: min={table.coverage.min():.2f} "
-                f"median={table.coverage.median():.2f} mean={table.coverage.mean():.2f}")
+    logger.info(
+        f"Coverage vs reference: min={table.coverage.min():.2f} "
+        f"median={table.coverage.median():.2f} mean={table.coverage.mean():.2f}"
+    )
     below = table[table.coverage < args.min_coverage].sort_values("coverage")
     if len(below):
-        listed = ", ".join(f"{r.pdb_id} (cov {r.coverage:.2f})" for r in below.head(10).itertuples())
+        listed = ", ".join(
+            f"{r.pdb_id} (cov {r.coverage:.2f})" for r in below.head(10).itertuples()
+        )
         more = f" (+{len(below) - 10} more)" if len(below) > 10 else ""
-        logger.warning(f"{len(below)} structure(s) below --min-coverage "
-                       f"{args.min_coverage:.2f}, excluded: {listed}{more}")
+        logger.warning(
+            f"{len(below)} structure(s) below --min-coverage "
+            f"{args.min_coverage:.2f}, excluded: {listed}{more}"
+        )
         table = table[table.coverage >= args.min_coverage].reset_index(drop=True)
     if table.empty:
-        logger.error("No structures meet --min-coverage; reference likely incompatible "
-                     "with the cohort.")
+        logger.error(
+            "No structures meet --min-coverage; reference likely incompatible with the cohort."
+        )
         sys.exit(1)
 
     mutant_group = table[table.identity >= args.identity_cutoff]

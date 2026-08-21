@@ -178,12 +178,34 @@ def main() -> None:
     verbosity.add_argument("--quiet", action="store_true", help="Show warnings and errors only")
     args = parser.parse_args()
 
-    edia_cutoff = args.edia_cutoff if args.edia_cutoff is not None else getattr(config, "EDIA_CUTOFF", None)
-    bfactor_cutoff = args.bfactor_cutoff if args.bfactor_cutoff is not None else getattr(config, "BFACTOR_CUTOFF", None)
-    bfactor_mode = args.bfactor_mode if args.bfactor_mode is not None else getattr(config, "BFACTOR_MODE", "zscore")
-    bfactor_population = args.bfactor_population if args.bfactor_population is not None else getattr(config, "BFACTOR_POPULATION", "water")
-    drop_if_no_edia_json = args.drop_if_no_edia_json if args.drop_if_no_edia_json is not None else getattr(config, "DROP_IF_NO_EDIA_JSON", False)
-    exclusive_borderline = args.exclusive_borderline if args.exclusive_borderline is not None else getattr(config, "FILTER_BORDERLINE_EXCLUSIVE", False)
+    edia_cutoff = (
+        args.edia_cutoff if args.edia_cutoff is not None else getattr(config, "EDIA_CUTOFF", None)
+    )
+    bfactor_cutoff = (
+        args.bfactor_cutoff
+        if args.bfactor_cutoff is not None
+        else getattr(config, "BFACTOR_CUTOFF", None)
+    )
+    bfactor_mode = (
+        args.bfactor_mode
+        if args.bfactor_mode is not None
+        else getattr(config, "BFACTOR_MODE", "zscore")
+    )
+    bfactor_population = (
+        args.bfactor_population
+        if args.bfactor_population is not None
+        else getattr(config, "BFACTOR_POPULATION", "water")
+    )
+    drop_if_no_edia_json = (
+        args.drop_if_no_edia_json
+        if args.drop_if_no_edia_json is not None
+        else getattr(config, "DROP_IF_NO_EDIA_JSON", False)
+    )
+    exclusive_borderline = (
+        args.exclusive_borderline
+        if args.exclusive_borderline is not None
+        else getattr(config, "FILTER_BORDERLINE_EXCLUSIVE", False)
+    )
 
     logger.remove()
     if args.quiet:
@@ -208,9 +230,7 @@ def main() -> None:
     missing = [m for m, p in cif_paths.items() if not p.exists()]
     found = [m for m, p in cif_paths.items() if p.exists()]
 
-    edia_paths = {
-        m: cif_path_for(m, config.ALL_PDB_REDO_DIR, config.EDIA_TEMPLATE) for m in found
-    }
+    edia_paths = {m: cif_path_for(m, config.ALL_PDB_REDO_DIR, config.EDIA_TEMPLATE) for m in found}
 
     logger.info(f"Cohort:  {cohort_id}")
     logger.info(f"Members: {len(member_ids)} total — {len(found)} found, {len(missing)} missing")
@@ -225,10 +245,14 @@ def main() -> None:
         no_json = [m for m, p in edia_paths.items() if not p.exists()]
         if no_json:
             action = "drop all their waters" if drop_if_no_edia_json else "keep their waters"
-            logger.warning(f"Missing EDIA JSON for {len(no_json)} structure(s) — will {action}: {', '.join(no_json)}")
+            logger.warning(
+                f"Missing EDIA JSON for {len(no_json)} structure(s) — will {action}: {', '.join(no_json)}"
+            )
     if bfactor_cutoff is not None:
         if bfactor_mode == "zscore":
-            logger.info(f"B-factor: z-score {bfactor_op} {bfactor_cutoff} ({bfactor_population} population)")
+            logger.info(
+                f"B-factor: z-score {bfactor_op} {bfactor_cutoff} ({bfactor_population} population)"
+            )
         else:
             logger.info(f"B-factor: absolute {bfactor_op} {bfactor_cutoff}")
     logger.info(f"Jobs:    {args.jobs}")
