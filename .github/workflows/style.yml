@@ -1,0 +1,24 @@
+name: style
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # Pinned to the same version prek.toml uses, so a local hook run and CI
+      # can never disagree about formatting.
+      - run: pip install ruff==0.15.13
+      # Explicit paths rather than `.`: notebooks/ is excluded by pyproject and
+      # experiments/ is tracked on dev only, so naming the paths keeps the check
+      # identical on both branches.
+      - run: ruff check cw/ scripts/ tests/
+      - run: ruff format --check cw/ scripts/ tests/
