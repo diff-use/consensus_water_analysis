@@ -15,19 +15,19 @@ Four modes (purpose · command · where the output is viewed):
       → data/<cohort>/pairwise_metrics_<cutoff>.csv, viewed in
         notebooks/optional_find_isomorphous_subset_and_align_ref.py, Part 2 (§5–§7);
         with -o .../reference_pairwise_metrics_<cutoff>.csv it is the deposited baseline in
-        notebooks/02_refinement_water_heatmaps.py (Summary + Section B).
+        experiments/refinement_water_heatmaps.py (Summary + Section B).
 
   --self-refined — pairwise metrics among the self-refined diagonal CIFs
     (<X>_refined_by_<X>_<V>), a re-refined-reference baseline.
       pairwise_water_metrics.py --self-refined --results-dir DIR [--variant V] [--no-filter] [-o CSV]
       → <results-dir parent>/self_refined_pairwise_metrics_<V>_<cutoff>.csv, viewed in
-        notebooks/02_refinement_water_heatmaps.py (Section B).
+        experiments/refinement_water_heatmaps.py (Section B).
 
   --phenix — each reference vs its cross-refinement predictors (<b>_refined_by_<a>_<V>),
     grounded on deposited waters or, with --ref-from-self-refined, on <a>_refined_by_<a>.
       pairwise_water_metrics.py --phenix --results-dir DIR (--ref-dir DIR | --ref-from-self-refined) [--variant V] [--no-filter] [-o CSV]
       → <results-dir parent>/phenix_pairwise_metrics[_selfref]_<V>_<cutoff>.csv, viewed in
-        notebooks/02_refinement_water_heatmaps.py (Section B).
+        experiments/refinement_water_heatmaps.py (Section B).
 
   --partition — starting-model-bias decomposition: per off-diagonal pair, the cross-refinement's
     recall of the shared / b_only / a_only / c_only water groups (see run_partition). The groups
