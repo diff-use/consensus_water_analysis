@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
+from cw.metrics import consensus_water_mask
+
 
 def run_hdbscan(
     coords: np.ndarray,
@@ -275,7 +277,7 @@ def _fit_candidate_grid(
                 clusters_df["std_x"] ** 2 + clusters_df["std_y"] ** 2 + clusters_df["std_z"] ** 2
             )
             occ_ids = clusters_df.loc[clusters_df["cluster_occupancy"] >= 0.3, "cluster_id"]
-            in_occ = members_df["within_cutoff"] & members_df["cluster_id"].isin(occ_ids)
+            in_occ = consensus_water_mask(members_df, clusters_df, 0.3)
             row["median_spread"] = float(spreads.median())
             row["radius_reject_frac"] = (n_rejected / n_assigned) if n_assigned else float("nan")
             row["n_occ_ge_0_3"] = int(len(occ_ids))
