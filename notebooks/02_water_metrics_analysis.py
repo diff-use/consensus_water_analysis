@@ -42,13 +42,20 @@ def _():
     from matplotlib.patches import Patch
     from scipy import stats
 
-    from cw.metrics import consensus_centers, per_structure_consensus_pr
+    from cw.io import find_cohort_metadata
+    from cw.metrics import (
+        consensus_centers,
+        consensus_water_mask,
+        per_structure_consensus_pr,
+    )
 
     return (
         Patch,
         Path,
         config,
         consensus_centers,
+        consensus_water_mask,
+        find_cohort_metadata,
         np,
         pd,
         per_structure_consensus_pr,
@@ -118,23 +125,16 @@ def _(mo):
 
 
 @app.cell
-def _(Path, config, consensus_centers, np, pd, per_structure_consensus_pr):
-    def find_metadata(cohort):
-        """metadata.csv for a cohort directory, walking up trailing `_<token>`
-        segments: water-level subsets (`_iso`, `_bfactor`, …) don't re-deposit
-        per-structure metadata, which is per-PDB and lives in the parent cohort dir.
-        Mirrors the SUBSET→DATA fallback in 01_cluster_analysis.py. None if absent.
-        """
-        probe = cohort
-        while True:
-            path = Path(config.DATA_DIR) / probe / "metadata.csv"
-            if path.exists():
-                return path
-            if "_" not in probe:
-                return None
-            probe = probe.rsplit("_", 1)[0]
-
-
+def _(
+    Path,
+    config,
+    consensus_centers,
+    consensus_water_mask,
+    find_cohort_metadata,
+    np,
+    pd,
+    per_structure_consensus_pr,
+):
     def load_cohort(cohort, cutoff, match_radius, suffix=""):
         """(per-water frame, per-structure frame, one-line summary) for one cohort.
 
@@ -147,10 +147,7 @@ def _(Path, config, consensus_centers, np, pd, per_structure_consensus_pr):
         clusters = pd.read_csv(directory / f"clusters{suffix}.csv")
         members = pd.read_csv(directory / f"cluster_members{suffix}.csv")
 
-        consensus_ids = set(
-            clusters.loc[clusters["cluster_occupancy"] >= cutoff, "cluster_id"]
-        )
-        is_consensus = members["within_cutoff"] & members["cluster_id"].isin(consensus_ids)
+        is_consensus = consensus_water_mask(members, clusters, cutoff)
         waters = members.assign(
             group=np.where(is_consensus, "consensus", "nonconsensus"), cohort=cohort,
         )
@@ -161,7 +158,7 @@ def _(Path, config, consensus_centers, np, pd, per_structure_consensus_pr):
         # metadata scalars can carry "<missing>" strings, so coerce to numeric.
         centers = consensus_centers(clusters, cutoff)
         pr = per_structure_consensus_pr(members, centers, match_radius)
-        meta_path = find_metadata(cohort)
+        meta_path = find_cohort_metadata(config.DATA_DIR, cohort)
         if meta_path is None:
             structures, note = pr, "no metadata.csv found"
         else:
