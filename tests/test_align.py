@@ -26,6 +26,7 @@ def _mtz(pdb_id: str):
         pytest.skip(f"MTZ fixture missing — copy to {p}")
     return p
 
+
 # ── kabsch (pure math, no fixtures) ───────────────────────────────────────────
 
 
@@ -106,11 +107,16 @@ def test_align_starting_model_cli(cif_path_6ybf, cif_path_5f16, tmp_path, monkey
         "argv",
         [
             "align_starting_model.py",
-            "--mobile", str(cif_path_5f16),
-            "--reference", str(cif_path_6ybf),
-            "--out", str(out),
-            "--pdb-id", "6ybf",
-            "--ref-pdb-id", "5f16",
+            "--mobile",
+            str(cif_path_5f16),
+            "--reference",
+            str(cif_path_6ybf),
+            "--out",
+            str(out),
+            "--pdb-id",
+            "6ybf",
+            "--ref-pdb-id",
+            "5f16",
         ],
     )
 

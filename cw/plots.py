@@ -131,28 +131,49 @@ def plot_pr_scatter(
 
     if style == "hexbin":
         sc = ax.hexbin(
-            pr_df[recall_col], pr_df[precision_col],
-            C=color_values, reduce_C_function=np.mean,
-            gridsize=20, cmap=plot_cmap, norm=norm, mincnt=1,
+            pr_df[recall_col],
+            pr_df[precision_col],
+            C=color_values,
+            reduce_C_function=np.mean,
+            gridsize=20,
+            cmap=plot_cmap,
+            norm=norm,
+            mincnt=1,
         )
     elif color_values is None:
         ax.scatter(
-            pr_df[recall_col], pr_df[precision_col],
-            alpha=alpha, edgecolors="k", s=marker_size, color="steelblue",
+            pr_df[recall_col],
+            pr_df[precision_col],
+            alpha=alpha,
+            edgecolors="k",
+            s=marker_size,
+            color="steelblue",
         )
         sc = None
     else:
         sc = ax.scatter(
-            pr_df[recall_col], pr_df[precision_col],
-            c=color_values, cmap=plot_cmap, norm=norm,
-            alpha=alpha, edgecolors="k", s=marker_size,
+            pr_df[recall_col],
+            pr_df[precision_col],
+            c=color_values,
+            cmap=plot_cmap,
+            norm=norm,
+            alpha=alpha,
+            edgecolors="k",
+            s=marker_size,
         )
 
     if sc is not None and color_values is not None:
         cbar_opts = {"pad": 0.02, **(cbar_kwargs or {})}
         cbar = (
-            fig.colorbar(sc, ax=ax, extend="both", spacing="uniform",
-                         ticks=boundaries, format="%.3g", **cbar_opts)
+            fig.colorbar(
+                sc,
+                ax=ax,
+                extend="both",
+                spacing="uniform",
+                ticks=boundaries,
+                format="%.3g",
+                **cbar_opts,
+            )
             if boundaries is not None
             else fig.colorbar(sc, ax=ax, **cbar_opts)
         )
@@ -227,11 +248,29 @@ def shared_range(matrices, center=None):
     )
 
 
-def draw_heatmap(matrix, ax, *, title="", cbar_label="", cmap="viridis", center=None,
-                 annot=True, fmt=".2f", vmin=None, vmax=None, cbar=True,
-                 mask_diagonal=False, mask_upper=False, xlabel="", ylabel="",
-                 title_fontsize=None, label_fontsize=None, tick_fontsize=None,
-                 cbar_fontsize=None, annot_fontsize=None):
+def draw_heatmap(
+    matrix,
+    ax,
+    *,
+    title="",
+    cbar_label="",
+    cmap="viridis",
+    center=None,
+    annot=True,
+    fmt=".2f",
+    vmin=None,
+    vmax=None,
+    cbar=True,
+    mask_diagonal=False,
+    mask_upper=False,
+    xlabel="",
+    ylabel="",
+    title_fontsize=None,
+    label_fontsize=None,
+    tick_fontsize=None,
+    cbar_fontsize=None,
+    annot_fontsize=None,
+):
     """Draw one annotated, square seaborn heatmap onto `ax`.
 
     mask_diagonal blanks the leading diagonal (self-comparisons) → NaN.
@@ -251,9 +290,19 @@ def draw_heatmap(matrix, ax, *, title="", cbar_label="", cmap="viridis", center=
         if mask_upper and rows == cols:
             mask |= np.triu(np.ones((rows, cols), dtype=bool), k=1)
     sns.heatmap(
-        matrix, ax=ax, cmap=cmap, center=center, annot=annot, fmt=fmt,
-        vmin=vmin, vmax=vmax, cbar=cbar, mask=mask,
-        square=True, linewidths=0.5, linecolor="white",
+        matrix,
+        ax=ax,
+        cmap=cmap,
+        center=center,
+        annot=annot,
+        fmt=fmt,
+        vmin=vmin,
+        vmax=vmax,
+        cbar=cbar,
+        mask=mask,
+        square=True,
+        linewidths=0.5,
+        linecolor="white",
         annot_kws={"size": annot_fontsize} if annot_fontsize is not None else None,
         cbar_kws={"label": cbar_label, "shrink": 0.6},
     )
@@ -269,12 +318,29 @@ def draw_heatmap(matrix, ax, *, title="", cbar_label="", cmap="viridis", center=
             _cb.ax.tick_params(labelsize=cbar_fontsize)
 
 
-def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=None,
-                annot=True, fmt=".2f", panel_size=4.0, shared_cbar=False,
-                mask_diagonal=False, mask_upper=False, vmin=None, vmax=None,
-                xlabel="", ylabel="",
-                title_fontsize=None, label_fontsize=None, tick_fontsize=None,
-                cbar_fontsize=None, annot_fontsize=None):
+def make_panels(
+    matrices,
+    *,
+    specs=None,
+    cbar_label="",
+    cmap="viridis",
+    center=None,
+    annot=True,
+    fmt=".2f",
+    panel_size=4.0,
+    shared_cbar=False,
+    mask_diagonal=False,
+    mask_upper=False,
+    vmin=None,
+    vmax=None,
+    xlabel="",
+    ylabel="",
+    title_fontsize=None,
+    label_fontsize=None,
+    tick_fontsize=None,
+    cbar_fontsize=None,
+    annot_fontsize=None,
+):
     """Render a {label: matrix} dict as a row of heatmap panels.
 
     Two styling modes:
@@ -311,6 +377,7 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
 
     Returns the figure.
     """
+
     def _flag(flag, label):
         return flag.get(label, False) if isinstance(flag, dict) else flag
 
@@ -322,20 +389,30 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
     axs = axes[0]
 
     _fonts = dict(
-        title_fontsize=title_fontsize, label_fontsize=label_fontsize,
-        tick_fontsize=tick_fontsize, cbar_fontsize=cbar_fontsize, annot_fontsize=annot_fontsize,
+        title_fontsize=title_fontsize,
+        label_fontsize=label_fontsize,
+        tick_fontsize=tick_fontsize,
+        cbar_fontsize=cbar_fontsize,
+        annot_fontsize=annot_fontsize,
     )
 
     if specs is not None:
         for ax, (key, m) in zip(axs, matrices.items(), strict=True):
             spec = specs[key]
             draw_heatmap(
-                m, ax, title=spec["label"], cbar_label=spec.get("cbar_label", spec["label"]),
-                cmap=spec["cmap"], vmin=spec.get("vmin"), vmax=spec.get("vmax"),
-                annot=annot, fmt=fmt,
+                m,
+                ax,
+                title=spec["label"],
+                cbar_label=spec.get("cbar_label", spec["label"]),
+                cmap=spec["cmap"],
+                vmin=spec.get("vmin"),
+                vmax=spec.get("vmax"),
+                annot=annot,
+                fmt=fmt,
                 mask_diagonal=spec.get("mask_diagonal", _flag(mask_diagonal, key)),
                 mask_upper=spec.get("mask_upper", _flag(mask_upper, key)),
-                xlabel=_text(xlabel, key), ylabel=_text(ylabel, key),
+                xlabel=_text(xlabel, key),
+                ylabel=_text(ylabel, key),
                 **_fonts,
             )
         fig.tight_layout()
@@ -351,10 +428,21 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
         _vmax = vmax
     for ax, (label, m) in zip(axs, matrices.items(), strict=True):
         draw_heatmap(
-            m, ax, title=label, cbar_label=cbar_label, cmap=cmap, center=center,
-            annot=annot, fmt=fmt, vmin=_vmin, vmax=_vmax, cbar=not shared_cbar,
-            mask_diagonal=_flag(mask_diagonal, label), mask_upper=_flag(mask_upper, label),
-            xlabel=_text(xlabel, label), ylabel=_text(ylabel, label),
+            m,
+            ax,
+            title=label,
+            cbar_label=cbar_label,
+            cmap=cmap,
+            center=center,
+            annot=annot,
+            fmt=fmt,
+            vmin=_vmin,
+            vmax=_vmax,
+            cbar=not shared_cbar,
+            mask_diagonal=_flag(mask_diagonal, label),
+            mask_upper=_flag(mask_upper, label),
+            xlabel=_text(xlabel, label),
+            ylabel=_text(ylabel, label),
             **_fonts,
         )
     if shared_cbar:
@@ -362,8 +450,9 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
         # pad/fraction are fractions of the (combined) parent axes width, which grows
         # with panel count; scale them by n so the gap and thickness stay panel-sized
         # instead of drifting far right as more panels are added.
-        cb = fig.colorbar(sm, ax=axs.tolist(), label=cbar_label, shrink=0.75,
-                          pad=0.1 / n, fraction=0.08 / n)
+        cb = fig.colorbar(
+            sm, ax=axs.tolist(), label=cbar_label, shrink=0.75, pad=0.1 / n, fraction=0.08 / n
+        )
         if cbar_fontsize is not None:
             cb.set_label(cbar_label, fontsize=cbar_fontsize)
             cb.ax.tick_params(labelsize=cbar_fontsize)
@@ -372,10 +461,23 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
     return fig
 
 
-def make_panel_grid(rows, *, row_specs=None, panel_size=3.6, annot=True, fmt=".2f",
-                    mask_diagonal=False, mask_upper=False, xlabel="", ylabel="",
-                    title_fontsize=None, label_fontsize=None, tick_fontsize=None,
-                    cbar_fontsize=None, annot_fontsize=None):
+def make_panel_grid(
+    rows,
+    *,
+    row_specs=None,
+    panel_size=3.6,
+    annot=True,
+    fmt=".2f",
+    mask_diagonal=False,
+    mask_upper=False,
+    xlabel="",
+    ylabel="",
+    title_fontsize=None,
+    label_fontsize=None,
+    tick_fontsize=None,
+    cbar_fontsize=None,
+    annot_fontsize=None,
+):
     """Render a grid of heatmaps: one **row per key** of `rows`, sharing columns.
 
     `rows` is an ordered mapping `{row_key: {panel_label: matrix}}`; every row must carry
@@ -393,6 +495,7 @@ def make_panel_grid(rows, *, row_specs=None, panel_size=3.6, annot=True, fmt=".2
     (str or `{panel_label: str}`), and the `*_fontsize` args behave as in `make_panels`,
     applied per panel across every row. Returns the figure.
     """
+
     def _flag(flag, label):
         return flag.get(label, False) if isinstance(flag, dict) else flag
 
@@ -407,11 +510,18 @@ def make_panel_grid(rows, *, row_specs=None, panel_size=3.6, annot=True, fmt=".2
     # constrained layout auto-reserves room for titles / labels / ticks / colorbars, so
     # larger fonts push panels apart instead of overlapping them.
     fig, axes = plt.subplots(
-        nrow, ncol, figsize=(panel_size * ncol, panel_size * nrow),
-        squeeze=False, layout="constrained",
+        nrow,
+        ncol,
+        figsize=(panel_size * ncol, panel_size * nrow),
+        squeeze=False,
+        layout="constrained",
     )
-    _fonts = dict(title_fontsize=title_fontsize, label_fontsize=label_fontsize,
-                  tick_fontsize=tick_fontsize, annot_fontsize=annot_fontsize)
+    _fonts = dict(
+        title_fontsize=title_fontsize,
+        label_fontsize=label_fontsize,
+        tick_fontsize=tick_fontsize,
+        annot_fontsize=annot_fontsize,
+    )
 
     for r, row_key in enumerate(row_keys):
         mats = rows[row_key]
@@ -425,21 +535,30 @@ def make_panel_grid(rows, *, row_specs=None, panel_size=3.6, annot=True, fmt=".2
         row_axes = axes[r]
         for ax, col_label in zip(row_axes, col_labels, strict=True):
             draw_heatmap(
-                mats[col_label], ax,
+                mats[col_label],
+                ax,
                 title=col_label if r == 0 else "",
-                cbar_label="", cmap=cmap, center=center,
-                annot=annot, fmt=fmt, vmin=vmin, vmax=vmax, cbar=False,
+                cbar_label="",
+                cmap=cmap,
+                center=center,
+                annot=annot,
+                fmt=fmt,
+                vmin=vmin,
+                vmax=vmax,
+                cbar=False,
                 mask_diagonal=_flag(mask_diagonal, col_label),
                 mask_upper=_flag(mask_upper, col_label),
-                xlabel=_text(xlabel, col_label), ylabel=_text(ylabel, col_label),
+                xlabel=_text(xlabel, col_label),
+                ylabel=_text(ylabel, col_label),
                 **_fonts,
             )
         # one shared colorbar per row; constrained layout places it, `aspect` keeps it
         # thin, and a small `pad` (fraction of the row's width) pulls it in close to the
         # last panel instead of leaving the default gap.
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
-        cb = fig.colorbar(sm, ax=row_axes.tolist(), label=cbar_label,
-                          shrink=0.9, aspect=40, pad=0.01)
+        cb = fig.colorbar(
+            sm, ax=row_axes.tolist(), label=cbar_label, shrink=0.9, aspect=40, pad=0.01
+        )
         if cbar_fontsize is not None:
             cb.set_label(cbar_label, fontsize=cbar_fontsize)
             cb.ax.tick_params(labelsize=cbar_fontsize)

@@ -153,7 +153,7 @@ def load_edia(json_path: Path) -> dict[tuple[str, int, str], float] | None:
 
 
 def load_edia_all_altlocs(json_path: Path) -> dict[tuple[str, int, str], list[float]]:
-    """Like load_edia, but accumulates a list per residue instead of overwriting on 
+    """Like load_edia, but accumulates a list per residue instead of overwriting on
     duplicate keys. This is used to preserve waters with altlocs, but altloc id is not
     explicitly stored in the JSON file.
 
@@ -233,7 +233,9 @@ def load_protein(
     return protein, offset
 
 
-def _attach_edia(df: pd.DataFrame, edia_dict_of_lists: dict[tuple[str, int, str], list[float]]) -> pd.DataFrame:
+def _attach_edia(
+    df: pd.DataFrame, edia_dict_of_lists: dict[tuple[str, int, str], list[float]]
+) -> pd.DataFrame:
     """Attach EDIAm scores to df via the shared positional altloc-pairing contract.
 
     Builds one (chain_id, res_id, ins_code) key per CIF row in atom_site order and
@@ -268,7 +270,9 @@ def _attach_muse(df: pd.DataFrame, muse_csv: Path) -> pd.DataFrame:
     muse = pd.read_csv(muse_csv)
     muse = muse[muse["is_water"] == True].copy()  # noqa: E712
     muse["ins_code"] = muse["insertion_code"].apply(normalize_ins_code)
-    muse = muse.rename(columns={"residue_seq_id": "res_id"})[["chain_id", "res_id", "ins_code", "score"]]
+    muse = muse.rename(columns={"residue_seq_id": "res_id"})[
+        ["chain_id", "res_id", "ins_code", "score"]
+    ]
 
     df = df.merge(muse, on=["chain_id", "res_id", "ins_code"], how="left")
     df = df.rename(columns={"score": "muse_score"})
@@ -422,11 +426,7 @@ def write_cluster_cif(
             "y": clusters_df["center_y"].to_numpy(dtype=float),
             "z": clusters_df["center_z"].to_numpy(dtype=float),
             "b_factor": np.sqrt(
-                (
-                    clusters_df["std_x"] ** 2
-                    + clusters_df["std_y"] ** 2
-                    + clusters_df["std_z"] ** 2
-                )
+                (clusters_df["std_x"] ** 2 + clusters_df["std_y"] ** 2 + clusters_df["std_z"] ** 2)
                 / 3
             ).to_numpy(dtype=float),
             "occupancy": clusters_df["cluster_occupancy"].to_numpy(dtype=float),

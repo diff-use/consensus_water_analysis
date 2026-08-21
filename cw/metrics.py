@@ -192,9 +192,7 @@ def clustering_summary(
     if n_clusters == 0 or num_water == 0:
         return summary
 
-    conserved_ids = clusters.loc[
-        clusters["cluster_occupancy"] >= occupancy_cutoff, "cluster_id"
-    ]
+    conserved_ids = clusters.loc[clusters["cluster_occupancy"] >= occupancy_cutoff, "cluster_id"]
     in_conserved = consensus_water_mask(cluster_members, clusters, occupancy_cutoff)
     summary["num_conserved_clusters"] = int(len(conserved_ids))
     summary["conserved_clusters_frac"] = len(conserved_ids) / n_clusters
@@ -222,7 +220,5 @@ def per_structure_consensus_chamfer(
     rows = []
     for pdb_id, group in cluster_members.groupby("pdb_id"):
         water_coords = group[["x", "y", "z"]].to_numpy()
-        rows.append(
-            {"pdb_id": pdb_id, "chamfer": chamfer_distance(center_coords, water_coords)}
-        )
+        rows.append({"pdb_id": pdb_id, "chamfer": chamfer_distance(center_coords, water_coords)})
     return pd.DataFrame(rows)

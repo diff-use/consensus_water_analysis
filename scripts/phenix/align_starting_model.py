@@ -59,9 +59,15 @@ def adopt_crystal_symmetry(aligned_cif: Path, reference_mtz: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--mobile", type=Path, required=True, help="Starting-model cif (REF_PDBID), transformed")
-    parser.add_argument("--reference", type=Path, required=True, help="MTZ-source cif (PDBID), alignment target")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--mobile", type=Path, required=True, help="Starting-model cif (REF_PDBID), transformed"
+    )
+    parser.add_argument(
+        "--reference", type=Path, required=True, help="MTZ-source cif (PDBID), alignment target"
+    )
     parser.add_argument("--out", type=Path, required=True, help="Output path for the aligned cif")
     parser.add_argument(
         "--reference-mtz",

@@ -236,9 +236,7 @@ def filter_waters(
     stats["n_removed_distance"] = int(np.sum(~keep))
 
     if edia_lists is not None and edia_cutoff is not None:
-        edia_keep = keep_by_edia(
-            atoms[water_O_mask], edia_lists, edia_cutoff, exclusive_borderline
-        )
+        edia_keep = keep_by_edia(atoms[water_O_mask], edia_lists, edia_cutoff, exclusive_borderline)
         stats["n_removed_edia"] = int(np.sum(keep & ~edia_keep))
         keep &= edia_keep
 
