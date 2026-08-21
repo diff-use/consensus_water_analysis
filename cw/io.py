@@ -245,7 +245,7 @@ def _attach_edia(df: pd.DataFrame, edia_dict_of_lists: dict[tuple[str, int, str]
     keys = [
         (str(chain_id), int(res_id), ins_code)
         for chain_id, res_id, ins_code in zip(
-            df["chain_id"], df["res_id"], df["ins_code"]
+            df["chain_id"], df["res_id"], df["ins_code"], strict=True
         )
     ]
     df["edia"] = edia_scores_in_order(keys, edia_dict_of_lists)

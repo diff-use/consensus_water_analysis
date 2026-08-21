@@ -327,7 +327,7 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
     )
 
     if specs is not None:
-        for ax, (key, m) in zip(axs, matrices.items()):
+        for ax, (key, m) in zip(axs, matrices.items(), strict=True):
             spec = specs[key]
             draw_heatmap(
                 m, ax, title=spec["label"], cbar_label=spec.get("cbar_label", spec["label"]),
@@ -349,7 +349,7 @@ def make_panels(matrices, *, specs=None, cbar_label="", cmap="viridis", center=N
         _vmin = vmin
     if vmax is not None:
         _vmax = vmax
-    for ax, (label, m) in zip(axs, matrices.items()):
+    for ax, (label, m) in zip(axs, matrices.items(), strict=True):
         draw_heatmap(
             m, ax, title=label, cbar_label=cbar_label, cmap=cmap, center=center,
             annot=annot, fmt=fmt, vmin=_vmin, vmax=_vmax, cbar=not shared_cbar,
@@ -423,7 +423,7 @@ def make_panel_grid(rows, *, row_specs=None, panel_size=3.6, annot=True, fmt=".2
         vmin = _auto_min if spec.get("vmin") is None else spec["vmin"]
         vmax = _auto_max if spec.get("vmax") is None else spec["vmax"]
         row_axes = axes[r]
-        for ax, col_label in zip(row_axes, col_labels):
+        for ax, col_label in zip(row_axes, col_labels, strict=True):
             draw_heatmap(
                 mats[col_label], ax,
                 title=col_label if r == 0 else "",

@@ -209,7 +209,7 @@ def report(table: pd.DataFrame, cohort_id: str, resolution_cutoff: float | None)
         ("apo (incl. peripheral-ligand-only)", table.ligand_class == "apo"),
         ("+ no peripheral ligand anywhere", table.ligand_state == "apo"),
         ("+ wildtype sequence", table.sequence_class == "wildtype"),
-        ("+ cryo (<=%gK)" % CRYO_MAX, table.temp_class == "cryo"),
+        (f"+ cryo (<={CRYO_MAX:g}K)", table.temp_class == "cryo"),
         ("+ empty pocket (no het within site cutoff)", table.site_het != 1),
         ("+ no ligand language in deposition text", table.text_verdict != "review"),
     ]

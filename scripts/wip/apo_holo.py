@@ -222,9 +222,10 @@ def main():
 
     sys.path.insert(0, str(Path(__file__).parent))          # apo_holo_lib
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))   # config, cw
+    import apo_holo_lib as lib
+
     import config
     from cw.io import read_cohort
-    import apo_holo_lib as lib
 
     aligned_dir = args.aligned_dir or (
         Path(config.DATA_DIR) / "carbonicanhydrase_000562_iso" / "aligned_pdbs")

@@ -30,11 +30,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))          # apo_holo_lib
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))   # config, cw
 
+import apo_holo_lib as lib
+
 import config
 from cw.io import cif_path_for, read_cohort
 from cw.metadata import _fetch_rcsb_entry
-
-import apo_holo_lib as lib
 
 # --- configuration ---------------------------------------------------------
 DEFAULT_COHORT = Path("data/hewls_65.txt")
