@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Water-treatment matrix for one structure, run against the local phenix install:
-# starting waters kept/stripped x ordered_solvent true/false x the strategies in
-# $STRATEGIES. Reuses scripts/phenix/refine_template_*.eff and
+# starting waters kept/stripped x the ordered_solvent settings in $ORDERED_SOLVENT
+# x the strategies in $STRATEGIES. Reuses scripts/phenix/refine_template_*.eff and
 # scripts/phenix/parse_phenix_log.sh.
 #
-#   ./experiments/3b3a_water_trials.sh 3b3a                       # 8 trials, occupancies refined
-#   STRATEGIES=rigid NO_OCC=1 ./experiments/3b3a_water_trials.sh  # 4 rigid trials, occupancies fixed
+# Arg 2 selects the starting model: data/${PDBID}_${VARIANT}.cif, defaulting to
+# the _final.cif. The reflection data is always ${PDBID}_final.mtz.
+#
+#   ./experiments/water_trials.sh 3b3a                            # 8 trials, occupancies refined
+#   STRATEGIES=rigid NO_OCC=1 ./experiments/water_trials.sh 3b3a  # 4 rigid trials, occupancies fixed
+#   STRATEGIES=adponly ORDERED_SOLVENT=false ./experiments/water_trials.sh 3b3a t0.50
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,10 +17,12 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PHENIX_DIR="$PROJECT_ROOT/scripts/phenix"
 
 PDBID="${1:-3b3a}"
+VARIANT="${2:-final}"
 export NPROC="${NPROC:-4}"
 export NUMCYCLE="${NUMCYCLE:-10}"
 export MAPCUTOFF="${MAPCUTOFF:-3.5}"
 STRATEGIES="${STRATEGIES:-default rigid}"
+ORDERED_SOLVENT="${ORDERED_SOLVENT:-true false}"
 
 # config.py's local-mode value; the committed pod config leaves PHENIX_ENV_PATH empty.
 PHENIX_ENV_PATH="${PHENIX_ENV_PATH:-/Users/dorismai/Applications/phenix-2.0-5936/phenix_env.sh}"
@@ -26,9 +32,13 @@ if [ -n "$PHENIX_ENV_PATH" ]; then
 fi
 
 IN_DIR="$PROJECT_ROOT/data"
-OUT_DIR="$IN_DIR/${PDBID}_water_trials"
+if [ "$VARIANT" = "final" ]; then
+    OUT_DIR="$IN_DIR/${PDBID}_water_trials"
+else
+    OUT_DIR="$IN_DIR/${PDBID}_${VARIANT}_water_trials"
+fi
 export MTZFILE="${IN_DIR}/${PDBID}_final.mtz"
-DEPOSITED_CIF="${IN_DIR}/${PDBID}_final.cif"
+DEPOSITED_CIF="${IN_DIR}/${PDBID}_${VARIANT}.cif"
 
 PREP_DIR="${OUT_DIR}/prepared_models"
 mkdir -p "$PREP_DIR"
@@ -48,7 +58,7 @@ if [ ! -f "$STRIPPED_CIF" ]; then
         output.file_name="$(basename "$STRIPPED_CIF")" > pdbtools_waterstripped.log 2>&1 )
 fi
 
-echo "NPROC: ${NPROC} NUMCYCLE: ${NUMCYCLE} MAPCUTOFF: ${MAPCUTOFF} STRATEGIES: ${STRATEGIES} NO_OCC: ${NO_OCC:-0}"
+echo "NPROC: ${NPROC} NUMCYCLE: ${NUMCYCLE} MAPCUTOFF: ${MAPCUTOFF} STRATEGIES: ${STRATEGIES} ORDERED_SOLVENT: ${ORDERED_SOLVENT} NO_OCC: ${NO_OCC:-0}"
 
 # NO_OCC=1 removes occupancy refinement for BOTH protein and water: drop
 # `occupancies` from the strategy (kills the altloc constrained groups and the
@@ -70,7 +80,7 @@ for strategy in $STRATEGIES; do
     EFF_TEMPLATE="${PHENIX_DIR}/refine_template_${strategy}.eff"
     for waters in kept stripped; do
         if [ "$waters" = "kept" ]; then MODEL="$KEPT_CIF"; else MODEL="$STRIPPED_CIF"; fi
-        for ordered_solvent in true false; do
+        for ordered_solvent in $ORDERED_SOLVENT; do
             TAG="${waters}_os${ordered_solvent}_${strategy}${TAG_SUFFIX}"
             PREFIX="${PDBID}_${TAG}"
             REFINE_DIR="${OUT_DIR}/${TAG}"
