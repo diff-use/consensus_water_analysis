@@ -2,7 +2,12 @@ import biotite.structure.io.pdbx as pdbx
 import numpy as np
 import pytest
 
-from cw.io import load_structure_waters, normalize_ins_code, write_filtered_cif
+from cw.io import (
+    find_cohort_metadata,
+    load_structure_waters,
+    normalize_ins_code,
+    write_filtered_cif,
+)
 
 # ── normalize_ins_code ────────────────────────────────────────────────────────
 
@@ -109,3 +114,31 @@ def test_write_filtered_cif_altloc_preserved(written_5f14):
     _, orig_altloc, out_cif, keep_mask = written_5f14
     out_altloc = out_cif.block["atom_site"]["label_alt_id"].as_array(str)
     np.testing.assert_array_equal(out_altloc, orig_altloc[keep_mask])
+
+
+# ── find_cohort_metadata ──────────────────────────────────────────────────────
+
+
+def _write_metadata(root, cohort):
+    directory = root / cohort
+    directory.mkdir(parents=True)
+    path = directory / "metadata.csv"
+    path.write_text("pdb_id\n")
+    return path
+
+
+def test_find_cohort_metadata_prefers_the_cohorts_own_file(tmp_path):
+    own = _write_metadata(tmp_path, "hewl_65_iso")
+    _write_metadata(tmp_path, "hewl_65")
+    assert find_cohort_metadata(tmp_path, "hewl_65_iso") == own
+
+
+def test_find_cohort_metadata_walks_up_to_the_parent_cohort(tmp_path):
+    parent = _write_metadata(tmp_path, "hewl_65")
+    (tmp_path / "hewl_65_iso_bfactor").mkdir()
+    assert find_cohort_metadata(tmp_path, "hewl_65_iso_bfactor") == parent
+
+
+def test_find_cohort_metadata_returns_none_when_no_ancestor_has_one(tmp_path):
+    _write_metadata(tmp_path, "unrelated_cohort")
+    assert find_cohort_metadata(tmp_path, "hewl_65_iso") is None
