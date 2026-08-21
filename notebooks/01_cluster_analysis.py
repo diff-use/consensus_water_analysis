@@ -38,6 +38,7 @@ def _():
     from matplotlib.colors import LogNorm, Normalize
     import seaborn as sns
 
+    from cw.io import find_cohort_metadata
     from cw.metrics import (
         consensus_centers,
         pareto_front,
@@ -55,6 +56,7 @@ def _():
         broken_y_axis,
         config,
         consensus_centers,
+        find_cohort_metadata,
         noise_stats,
         np,
         pareto_front,
@@ -88,7 +90,7 @@ def _(mo):
 
 
 @app.cell
-def _(Path, cohort_input, config, mo, pd):
+def _(Path, cohort_input, config, find_cohort_metadata, mo, pd):
     COHORT = cohort_input.value.strip()
     mo.stop(
         not COHORT,
@@ -114,10 +116,8 @@ def _(Path, cohort_input, config, mo, pd):
 
     # Per-structure deposited metadata (resolution, R-free, ...). Water-level
     # subsets share the parent cohort's metadata.csv, so fall back to DATA.
-    _meta_path = SUBSET / "metadata.csv"
-    if not _meta_path.exists():
-        _meta_path = DATA / "metadata.csv"
-    metadata = pd.read_csv(_meta_path) if _meta_path.exists() else None
+    _meta_path = find_cohort_metadata(config.DATA_DIR, SUBSET.name)
+    metadata = pd.read_csv(_meta_path) if _meta_path is not None else None
 
     # Occupancy above which a cluster counts as consensus — used by the occupancy
     # figure and every per-structure precision/recall computation downstream.
