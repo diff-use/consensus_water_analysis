@@ -59,6 +59,25 @@ def cif_path_for(pdb_id: str, all_pdb_redo_dir: Path | str, cif_template: str) -
     return Path(all_pdb_redo_dir) / cif_template.format(pdb_id=pdb_id)
 
 
+def find_cohort_metadata(data_dir: Path | str, cohort: str) -> Path | None:
+    """Path to a cohort directory's metadata.csv, walking up trailing `_<token>`
+    segments of the directory name until one exists.
+
+    Water-level subsets (`<cohort>_iso`, `<cohort>_bfactor…`) do not re-deposit
+    per-structure metadata — resolution and R-free are per-PDB, shared across
+    water filters — so the file lives in the parent cohort directory. Returns None
+    when no ancestor name has one.
+    """
+    probe = cohort
+    while True:
+        path = Path(data_dir) / probe / "metadata.csv"
+        if path.exists():
+            return path
+        if "_" not in probe:
+            return None
+        probe = probe.rsplit("_", 1)[0]
+
+
 def parse_identity(identity: str) -> tuple[str, str, str]:
     """Split '<mtz_source>_refined_by_<starting_model>_<variant>' into its three parts."""
     mtz_source, rest = identity.split("_refined_by_", 1)

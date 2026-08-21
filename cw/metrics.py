@@ -90,6 +90,22 @@ def consensus_centers(clusters: pd.DataFrame, occupancy_cutoff: float) -> np.nda
     return clusters.loc[mask, ["center_x", "center_y", "center_z"]].to_numpy()
 
 
+def consensus_water_mask(
+    cluster_members: pd.DataFrame,
+    clusters: pd.DataFrame,
+    occupancy_cutoff: float,
+) -> pd.Series:
+    """Boolean mask over cluster_members rows: True for a consensus water.
+
+    A water is consensus iff it is a within-cutoff member of a cluster whose
+    cluster_occupancy clears occupancy_cutoff. Everything else is False — noise,
+    radius-rejected members, and members of clusters below the cutoff. Indexed
+    like cluster_members, so it can be assigned straight back onto it.
+    """
+    consensus_ids = clusters.loc[clusters["cluster_occupancy"] >= occupancy_cutoff, "cluster_id"]
+    return cluster_members["within_cutoff"] & cluster_members["cluster_id"].isin(set(consensus_ids))
+
+
 def pareto_front(
     pr_df: pd.DataFrame,
     x_col: str = "recall",
@@ -179,9 +195,7 @@ def clustering_summary(
     conserved_ids = clusters.loc[
         clusters["cluster_occupancy"] >= occupancy_cutoff, "cluster_id"
     ]
-    in_conserved = cluster_members["within_cutoff"] & cluster_members[
-        "cluster_id"
-    ].isin(set(conserved_ids))
+    in_conserved = consensus_water_mask(cluster_members, clusters, occupancy_cutoff)
     summary["num_conserved_clusters"] = int(len(conserved_ids))
     summary["conserved_clusters_frac"] = len(conserved_ids) / n_clusters
     summary["conserved_water_frac"] = int(in_conserved.sum()) / num_water
