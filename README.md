@@ -121,7 +121,7 @@ uv run scripts/align_structures.py pdb_ids.txt [--reference PDB_ID] [--input-dir
 ### Stage 3.5 — Explore clustering hyperparameters (optional)
 
 ```
-uv run scripts/find_clustering_hyperparameters.py pdb_ids.txt [--input-dir DIR] [-o DIR] [--radius 1.4]
+uv run scripts/find_clustering_hyperparameters.py pdb_ids.txt [--input-dir DIR] [-o DIR] [--radius 1.0]
 ```
 
 - Reads: `aligned_pdbs/`
@@ -193,7 +193,7 @@ data/<cohort>/
 | `WATER_PROT_DIST_CUTOFF` | `4.0` | Distance cutoff in Å (Stage 2) |
 | `HDBSCAN_MIN_CLUSTER_SIZE` | `20` | HDBSCAN min_cluster_size (waters per cluster) |
 | `HDBSCAN_MIN_SAMPLES` | `10` | HDBSCAN min_samples |
-| `CLUSTER_MEMBER_RADIUS` | `1.4` | Radius in Å for post-HDBSCAN membership filter |
+| `CLUSTER_MEMBER_RADIUS` | `1.0` | Radius in Å for post-HDBSCAN membership filter |
 
 ## Verbosity
 
