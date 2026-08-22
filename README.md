@@ -2,6 +2,14 @@
 
 Conserved-water analysis from a fixed local set of PDB-REDO mmCIF structures.
 
+## Notebooks
+
+marimo notebooks (`.py`, run with `uv run marimo edit <path>`). They read the pre-computed CSVs — no CIF parsing:
+
+- [`notebooks/00_metadata_filter_align_demo.py`](notebooks/00_metadata_filter_align_demo.py) — single-structure demo / sanity checks for the core modules: metadata extraction, distance filtering, pairwise alignment.
+- [`notebooks/01_cluster_analysis.py`](notebooks/01_cluster_analysis.py) — cluster occupancy, water metrics, and per-structure precision/recall against the consensus waters with Pareto front drawn.
+- [`notebooks/02_water_metrics_analysis.py`](notebooks/02_water_metrics_analysis.py) — metric distributions, Q-Q plots, and statistical tests on per-water and per-structure analysis.
+
 ## Setup
 
 1. Copy and edit the config:
