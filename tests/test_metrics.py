@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats
 
 from cw.metrics import (
     compare_halves,
@@ -32,35 +33,37 @@ def test_consensus_water_mask_rejects_every_non_consensus_case():
 # ── compare_halves ────────────────────────────────────────────────────────────
 
 
-def test_effect_size_spans_full_separation():
-    low, high = np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0])
-    # Cliff's delta: +1 when every a beats every b, -1 reversed, 0 when identical.
-    assert effect_size(high, low, "mannwhitney") == 1.0
-    assert effect_size(low, high, "mannwhitney") == -1.0
-    assert effect_size(low, low, "mannwhitney") == 0.0
-
-
-def test_compare_halves_bootstrap_ci_brackets_the_effect():
+def test_effect_size_matches_scipys_mann_whitney_u():
+    # Cliff's delta here is a hand-rolled searchsorted reimplementation of the
+    # Mann-Whitney U rescaled to [-1, 1], kept because it is ~20x cheaper than
+    # scipy per call on the sample sizes the bootstrap resamples. Small integer
+    # ranges make ties common, which is where the left/right searchsorted
+    # asymmetry has to be right.
     rng = np.random.default_rng(0)
-    left, right = rng.normal(1.0, 1.0, 200), rng.normal(0.0, 1.0, 200)
-    result = compare_halves(left, right, n_boot=200)
-    assert result["n_left"] == 200 and result["n_right"] == 200
-    assert result["effect"] > 0  # left sits higher
-    assert result["ci_low"] < result["effect"] < result["ci_high"]
-    assert result["p"] < 0.001
+    for _ in range(100):
+        a = rng.integers(0, 5, rng.integers(2, 40)).astype(float)
+        b = rng.integers(0, 5, rng.integers(2, 40)).astype(float)
+        u = stats.mannwhitneyu(a, b).statistic
+        assert effect_size(a, b, "mannwhitney") == pytest.approx(2 * u / (a.size * b.size) - 1)
+    # sign convention: positive means the first sample sits higher
+    assert effect_size(np.array([4.0, 5.0]), np.array([1.0, 2.0]), "mannwhitney") == 1.0
 
 
 def test_compare_halves_unit_resampling_ignores_duplicated_rows():
     # Pseudo-replication: duplicating every water within a pdb_id adds no
     # independent information. Row resampling is fooled — the interval shrinks and
     # p collapses — while resampling whole pdb_ids is invariant to the copies.
+    # One structure's left value is NaN throughout, so the unit labels have to be
+    # masked in step with the values and that unit contributes to one half only.
     rng = np.random.default_rng(0)
     per_unit = rng.normal(0.0, 1.0, 30)
+    left_per_unit = per_unit + 1.0
+    left_per_unit[7] = np.nan
     n_boot = 400
 
     def compare(reps):
         units = np.repeat(np.arange(30), reps)
-        left, right = np.repeat(per_unit + 1.0, reps), np.repeat(per_unit, reps)
+        left, right = np.repeat(left_per_unit, reps), np.repeat(per_unit, reps)
         return (
             compare_halves(left, right, n_boot=n_boot),
             compare_halves(left, right, n_boot=n_boot, left_units=units, right_units=units),
@@ -71,6 +74,9 @@ def test_compare_halves_unit_resampling_ignores_duplicated_rows():
 
     rows_once, clustered_once = compare(1)
     rows_duplicated, clustered_duplicated = compare(16)
+
+    assert clustered_once["n_left"] == 29  # the NaN structure dropped
+    assert clustered_once["n_right"] == 30
 
     assert width(clustered_duplicated) == pytest.approx(width(clustered_once))
     assert clustered_duplicated["p"] == clustered_once["p"]
