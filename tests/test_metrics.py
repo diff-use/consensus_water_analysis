@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import pytest
-from scipy import stats
 
 from cw.metrics import (
     compare_halves,
@@ -33,20 +32,13 @@ def test_consensus_water_mask_rejects_every_non_consensus_case():
 # ── compare_halves ────────────────────────────────────────────────────────────
 
 
-def test_effect_size_matches_scipys_mann_whitney_u():
-    # Cliff's delta here is a hand-rolled searchsorted reimplementation of the
-    # Mann-Whitney U rescaled to [-1, 1], kept because it is ~20x cheaper than
-    # scipy per call on the sample sizes the bootstrap resamples. Small integer
-    # ranges make ties common, which is where the left/right searchsorted
-    # asymmetry has to be right.
-    rng = np.random.default_rng(0)
-    for _ in range(100):
-        a = rng.integers(0, 5, rng.integers(2, 40)).astype(float)
-        b = rng.integers(0, 5, rng.integers(2, 40)).astype(float)
-        u = stats.mannwhitneyu(a, b).statistic
-        assert effect_size(a, b, "mannwhitney") == pytest.approx(2 * u / (a.size * b.size) - 1)
-    # sign convention: positive means the first sample sits higher
-    assert effect_size(np.array([4.0, 5.0]), np.array([1.0, 2.0]), "mannwhitney") == 1.0
+def test_effect_size_rescales_scipys_u_to_cliffs_delta():
+    # scipy supplies U; the [-1, 1] rescaling and its orientation are ours, and a
+    # flipped sign would invert the `r` column of every reported table.
+    low, high = np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0])
+    assert effect_size(high, low, "mannwhitney") == 1.0
+    assert effect_size(low, high, "mannwhitney") == -1.0
+    assert effect_size(low, low, "mannwhitney") == 0.0
 
 
 def test_compare_halves_unit_resampling_ignores_duplicated_rows():

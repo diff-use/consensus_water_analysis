@@ -231,11 +231,10 @@ def per_structure_consensus_chamfer(
 def effect_size(a: np.ndarray, b: np.ndarray, test: str) -> float:
     """Signed effect size matching `test`; positive = `a` sits higher than `b`.
 
-    mannwhitney  Cliff's delta = P(a>b) - P(a<b), the Mann-Whitney U rescaled to
-                 [-1, 1] (and, for two independent samples, identical to the
-                 rank-biserial correlation). 0 = the halves overlap completely,
-                 ±1 = they separate completely. By searchsorted rather than via
-                 scipy, so a bootstrap can call it thousands of times.
+    mannwhitney  Cliff's delta = P(a>b) - P(a<b), which is scipy's Mann-Whitney U
+                 rescaled to [-1, 1] (and, for two independent samples, identical
+                 to the rank-biserial correlation). 0 = the halves overlap
+                 completely, ±1 = they separate completely.
     ks           the KS D statistic (unsigned, in [0, 1])
     welch        Cohen's d
     """
@@ -244,11 +243,11 @@ def effect_size(a: np.ndarray, b: np.ndarray, test: str) -> float:
     if test == "welch":
         pooled = np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
         return float((a.mean() - b.mean()) / pooled) if pooled > 0 else float("nan")
-    b_sorted = np.sort(b)
-    n_pairs = a.size * b.size
-    b_below_a = int(np.searchsorted(b_sorted, a, "left").sum())
-    b_above_a = n_pairs - int(np.searchsorted(b_sorted, a, "right").sum())
-    return (b_below_a - b_above_a) / n_pairs
+    # method="asymptotic" rather than the default "auto": only the p-value differs
+    # between methods and it is discarded here, while "auto" warns once per call on
+    # small tied samples — thousands of times inside a bootstrap.
+    u = stats.mannwhitneyu(a, b, method="asymptotic").statistic
+    return 2 * u / (a.size * b.size) - 1
 
 
 def group_values(values: np.ndarray, units: np.ndarray) -> dict:
