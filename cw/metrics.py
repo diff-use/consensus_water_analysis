@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import maximum_bipartite_matching
 from scipy.spatial import cKDTree
@@ -222,3 +223,134 @@ def per_structure_consensus_chamfer(
         water_coords = group[["x", "y", "z"]].to_numpy()
         rows.append({"pdb_id": pdb_id, "chamfer": chamfer_distance(center_coords, water_coords)})
     return pd.DataFrame(rows)
+
+
+# ── two-sample comparison of a split's two halves ─────────────────────────────
+
+
+def effect_size(a: np.ndarray, b: np.ndarray, test: str) -> float:
+    """Signed effect size matching `test`; positive = `a` sits higher than `b`.
+
+    mannwhitney  Cliff's delta = P(a>b) - P(a<b), which is scipy's Mann-Whitney U
+                 rescaled to [-1, 1] (and, for two independent samples, identical
+                 to the rank-biserial correlation). 0 = the halves overlap
+                 completely, ±1 = they separate completely.
+    ks           the KS D statistic (unsigned, in [0, 1])
+    welch        Cohen's d
+    """
+    if test == "ks":
+        return float(stats.ks_2samp(a, b).statistic)
+    if test == "welch":
+        pooled = np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
+        return float((a.mean() - b.mean()) / pooled) if pooled > 0 else float("nan")
+    # method="asymptotic" rather than the default "auto": only the p-value differs
+    # between methods and it is discarded here, while "auto" warns once per call on
+    # small tied samples — thousands of times inside a bootstrap.
+    u = stats.mannwhitneyu(a, b, method="asymptotic").statistic
+    return 2 * u / (a.size * b.size) - 1
+
+
+def group_values(values: np.ndarray, units: np.ndarray) -> dict:
+    """Split `values` into one array per unit label."""
+    order = np.argsort(units, kind="stable")
+    values, units = values[order], units[order]
+    edges = np.flatnonzero(np.r_[True, units[1:] != units[:-1], True])
+    return {units[i]: values[i:j] for i, j in zip(edges[:-1], edges[1:], strict=True)}
+
+
+def compare_halves(
+    left_values,
+    right_values,
+    test: str = "mannwhitney",
+    n_boot: int = 2000,
+    seed: int = 0,
+    left_units=None,
+    right_units=None,
+) -> dict:
+    """Two-sample comparison of a split's two halves, NaNs dropped.
+
+    Returns p / effect / ci_low / ci_high / n_left / n_right. The effect size is
+    the headline number and the p-value secondary: at large n a difference far too
+    small to matter still clears p < 0.001.
+
+    `n_boot` percentile-bootstrap resamples (0 to skip) give the 95% CI on the
+    effect size. Pass `*_units` when rows are not independent (waters sharing a
+    pdb_id): the bootstrap then resamples whole units, one shared draw per
+    iteration so the within-unit split stays paired, and p is inverted from that
+    distribution rather than from a test that would count correlated rows as
+    independent — which floors it at 1 / n_boot.
+    """
+    a, b = np.asarray(left_values, dtype=float), np.asarray(right_values, dtype=float)
+    keep_a, keep_b = np.isfinite(a), np.isfinite(b)
+    a, b = a[keep_a], b[keep_b]
+    if a.size < 2 or b.size < 2:
+        return dict(
+            p=float("nan"),
+            effect=float("nan"),
+            ci_low=float("nan"),
+            ci_high=float("nan"),
+            n_left=a.size,
+            n_right=b.size,
+        )
+    clustered = left_units is not None
+
+    p = float("nan")
+    if not clustered:
+        if test == "mannwhitney":
+            p = stats.mannwhitneyu(a, b, alternative="two-sided").pvalue
+        elif test == "ks":
+            p = stats.ks_2samp(a, b).pvalue
+        else:
+            p = stats.ttest_ind(a, b, equal_var=False).pvalue
+
+    ci_low = ci_high = float("nan")
+    if n_boot:
+        rng = np.random.default_rng(seed)
+        if clustered:
+            by_unit_a = group_values(a, np.asarray(left_units)[keep_a])
+            by_unit_b = group_values(b, np.asarray(right_units)[keep_b])
+            names = np.array(sorted(set(by_unit_a) | set(by_unit_b)))
+            empty = np.empty(0)
+
+            def resample():
+                drawn = rng.choice(names, names.size)
+                return (
+                    np.concatenate([by_unit_a.get(u, empty) for u in drawn]),
+                    np.concatenate([by_unit_b.get(u, empty) for u in drawn]),
+                )
+        else:
+
+            def resample():
+                return rng.choice(a, a.size), rng.choice(b, b.size)
+
+        boot = []
+        for _ in range(int(n_boot)):
+            draw_a, draw_b = resample()
+            boot.append(
+                effect_size(draw_a, draw_b, test) if draw_a.size and draw_b.size else np.nan
+            )
+        boot = np.array(boot)
+        ci_low, ci_high = np.nanpercentile(boot, [2.5, 97.5])
+        if clustered:
+            side = min(np.nanmean(boot <= 0), np.nanmean(boot >= 0))
+            p = float(np.clip(2 * side, 1 / int(n_boot), 1.0))
+    return dict(
+        p=float(p),
+        effect=effect_size(a, b, test),
+        ci_low=float(ci_low),
+        ci_high=float(ci_high),
+        n_left=a.size,
+        n_right=b.size,
+    )
+
+
+def spearman(df: pd.DataFrame, x_col: str, y_col: str) -> tuple[float, float]:
+    """Rank correlation of two columns, NaNs dropped; (nan, nan) when undefined
+    (the same column twice, or fewer than 3 complete pairs)."""
+    if x_col == y_col:
+        return float("nan"), float("nan")
+    pair = df[[x_col, y_col]].dropna()
+    if len(pair) < 3:
+        return float("nan"), float("nan")
+    rho, p = stats.spearmanr(pair[x_col], pair[y_col])
+    return float(rho), float(p)
