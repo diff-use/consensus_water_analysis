@@ -1,0 +1,24 @@
+name: tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install uv
+      # --locked fails if uv.lock has drifted from pyproject.toml, so the CI run
+      # uses exactly the pinned environment.
+      - run: uv sync --locked
+      # config.py is gitignored; nothing under cw/ or tests/ imports it, so the
+      # suite runs on a bare checkout. The committed CIF/EDIA fixtures cover all
+      # but the one MTZ-dependent test, which skips.
+      - run: uv run pytest tests/ -q

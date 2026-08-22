@@ -2,7 +2,13 @@ config.py
 PLAN.md
 CLAUDE.md
 memory/
-tests/fixtures/
+# Test fixtures: the CIF + EDIA JSON inputs are committed (~1 MB) so a fresh
+# clone can run the suite. The bulky MTZ (6 MB), the PDB copies and the PDB-REDO
+# data.json dumps stay local.
+tests/fixtures/**
+!tests/fixtures/**/
+!tests/fixtures/**/*_final.cif
+!tests/fixtures/**/*_final.json
 data/
 __marimo__/
 experiments/
@@ -11,6 +17,7 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .DS_Store
+._*
 .venv/
 .vscode/
 .claude/

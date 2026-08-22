@@ -44,14 +44,17 @@ def _():
 
     from cw.io import find_cohort_metadata
     from cw.metrics import (
+        compare_halves,
         consensus_centers,
         consensus_water_mask,
         per_structure_consensus_pr,
+        spearman,
     )
 
     return (
         Patch,
         Path,
+        compare_halves,
         config,
         consensus_centers,
         consensus_water_mask,
@@ -60,6 +63,7 @@ def _():
         pd,
         per_structure_consensus_pr,
         plt,
+        spearman,
         stats,
     )
 
@@ -639,110 +643,16 @@ def _(mo):
     ## Statistics builders
 
     `comparison_table` is the only place a statistic is computed, and both
-    statistics sections below call it. Nothing here is drawn on a figure.
+    statistics sections below call it. The statistics themselves — Cliff's delta,
+    the unit-resampling bootstrap, the rank correlation — live in `cw.metrics`
+    and are unit-tested there; what stays here is presentation. Nothing on this
+    page is drawn on a figure.
     """)
     return
 
 
 @app.cell
-def _(PERCENT_METRICS, np, pd, stats):
-    def effect_size(a, b, test):
-        """Signed effect size matching `test`; positive = `a` sits higher than `b`.
-
-        mannwhitney  Cliff's delta = P(a>b) - P(a<b), the Mann-Whitney U rescaled
-                     to [-1, 1] (and, for two independent samples, identical to the
-                     rank-biserial correlation). 0 = the halves overlap completely,
-                     ±1 = they separate completely. By searchsorted rather than via
-                     scipy, so the bootstrap can call it thousands of times.
-        ks           the KS D statistic (unsigned, in [0, 1])
-        welch        Cohen's d
-        """
-        if test == "ks":
-            return float(stats.ks_2samp(a, b).statistic)
-        if test == "welch":
-            pooled = np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
-            return float((a.mean() - b.mean()) / pooled) if pooled > 0 else float("nan")
-        b_sorted = np.sort(b)
-        n_pairs = a.size * b.size
-        b_below_a = int(np.searchsorted(b_sorted, a, "left").sum())
-        b_above_a = n_pairs - int(np.searchsorted(b_sorted, a, "right").sum())
-        return (b_below_a - b_above_a) / n_pairs
-
-
-    def group_values(values, units):
-        """Split `values` into one array per unit label."""
-        order = np.argsort(units, kind="stable")
-        values, units = values[order], units[order]
-        edges = np.flatnonzero(np.r_[True, units[1:] != units[:-1], True])
-        return {units[i]: values[i:j] for i, j in zip(edges[:-1], edges[1:])}
-
-
-    def compare_halves(left_values, right_values, test="mannwhitney", n_boot=2000,
-                       seed=0, left_units=None, right_units=None):
-        """Two-sample comparison of a split's two halves, NaNs dropped.
-
-        Returns p / effect / ci_low / ci_high / n_left / n_right. The effect size is
-        the headline number and the p-value secondary: at large n a difference far
-        too small to matter still clears p < 0.001.
-
-        `n_boot` percentile-bootstrap resamples (0 to skip) give the 95% CI on the
-        effect size. Pass `*_units` when rows are not independent (waters sharing a
-        pdb_id): the bootstrap then resamples whole units, one shared draw per
-        iteration so the within-unit split stays paired, and p is inverted from that
-        distribution rather than from a test that would count correlated rows as
-        independent — which floors it at 1 / n_boot.
-        """
-        a, b = np.asarray(left_values, dtype=float), np.asarray(right_values, dtype=float)
-        keep_a, keep_b = np.isfinite(a), np.isfinite(b)
-        a, b = a[keep_a], b[keep_b]
-        if a.size < 2 or b.size < 2:
-            return dict(p=float("nan"), effect=float("nan"), ci_low=float("nan"),
-                        ci_high=float("nan"), n_left=a.size, n_right=b.size)
-        clustered = left_units is not None
-
-        p = float("nan")
-        if not clustered:
-            if test == "mannwhitney":
-                p = stats.mannwhitneyu(a, b, alternative="two-sided").pvalue
-            elif test == "ks":
-                p = stats.ks_2samp(a, b).pvalue
-            else:
-                p = stats.ttest_ind(a, b, equal_var=False).pvalue
-
-        ci_low = ci_high = float("nan")
-        if n_boot:
-            rng = np.random.default_rng(seed)
-            if clustered:
-                by_unit_a = group_values(a, np.asarray(left_units)[keep_a])
-                by_unit_b = group_values(b, np.asarray(right_units)[keep_b])
-                names = np.array(sorted(set(by_unit_a) | set(by_unit_b)))
-                empty = np.empty(0)
-
-                def resample():
-                    drawn = rng.choice(names, names.size)
-                    return (np.concatenate([by_unit_a.get(u, empty) for u in drawn]),
-                            np.concatenate([by_unit_b.get(u, empty) for u in drawn]))
-            else:
-                def resample():
-                    return rng.choice(a, a.size), rng.choice(b, b.size)
-
-            boot = []
-            for _ in range(int(n_boot)):
-                draw_a, draw_b = resample()
-                boot.append(
-                    effect_size(draw_a, draw_b, test)
-                    if draw_a.size and draw_b.size else np.nan
-                )
-            boot = np.array(boot)
-            ci_low, ci_high = np.nanpercentile(boot, [2.5, 97.5])
-            if clustered:
-                side = min(np.nanmean(boot <= 0), np.nanmean(boot >= 0))
-                p = float(np.clip(2 * side, 1 / int(n_boot), 1.0))
-        return dict(p=float(p), effect=effect_size(a, b, test),
-                    ci_low=float(ci_low), ci_high=float(ci_high),
-                    n_left=a.size, n_right=b.size)
-
-
+def _(PERCENT_METRICS, compare_halves, np, pd, spearman):
     def p_stars(p):
         if not np.isfinite(p):
             return ""
@@ -756,18 +666,6 @@ def _(PERCENT_METRICS, np, pd, stats):
         """`p` keeping 2 decimals of its mantissa (1.43e-22) — rounding to 2
         decimals outright would render every p as 0.00."""
         return float(f"{p:.2e}")
-
-
-    def spearman(df, x_col, y_col):
-        """Rank correlation of two columns, NaNs dropped; (nan, nan) when undefined
-        (the same column twice, or fewer than 3 complete pairs)."""
-        if x_col == y_col:
-            return float("nan"), float("nan")
-        pair = df[[x_col, y_col]].dropna()
-        if len(pair) < 3:
-            return float("nan"), float("nan")
-        rho, p = stats.spearmanr(pair[x_col], pair[y_col])
-        return float(rho), float(p)
 
 
     def comparison_table(df, metrics, cohorts, cohort_labels, split, metric_labels,

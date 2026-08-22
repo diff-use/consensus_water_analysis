@@ -110,7 +110,11 @@ def _load_atoms(cif_path):
 
 def _water_keys(water_atoms):
     return [
-        (str(water_atoms.chain_id[i]), int(water_atoms.res_id[i]), normalize_ins_code(water_atoms.ins_code[i]))
+        (
+            str(water_atoms.chain_id[i]),
+            int(water_atoms.res_id[i]),
+            normalize_ins_code(water_atoms.ins_code[i]),
+        )
         for i in range(len(water_atoms))
     ]
 
@@ -160,7 +164,10 @@ def test_filter_edia_moderate_cutoff_drops_some(cif_path_6ybf, edia_path_6ybf):
     kept = filtered[water_oxygen_mask(filtered)]
     assert stats["n_removed_edia"] > 0
     assert kept.array_length() > 0
-    assert stats["n_removed_distance"] + stats["n_removed_edia"] + kept.array_length() == stats["n_water"]
+    assert (
+        stats["n_removed_distance"] + stats["n_removed_edia"] + kept.array_length()
+        == stats["n_water"]
+    )
     assert (edia_scores_in_order(_water_keys(kept), edia) >= cutoff).all()
 
 
@@ -236,8 +243,10 @@ def test_keep_by_bfactor_zscore_keeps_lowest_and_honours_population(cif_path_6yb
     water_b = atoms.b_factor[mask]
 
     keep = keep_by_bfactor(atoms, mask, 0.5)  # defaults: mode="zscore", population="water"
-    assert keep.any() and not keep.all()               # fixture sanity: cutoff splits the waters
-    assert water_b[keep].max() <= water_b[~keep].min()  # no dropped water is better-ordered than a kept one
+    assert keep.any() and not keep.all()  # fixture sanity: cutoff splits the waters
+    assert (
+        water_b[keep].max() <= water_b[~keep].min()
+    )  # no dropped water is better-ordered than a kept one
 
     masks = [keep_by_bfactor(atoms, mask, 0.5, population=p) for p in ("water", "protein", "all")]
     assert any(not np.array_equal(masks[0], m) for m in masks[1:])

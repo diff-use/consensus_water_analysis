@@ -87,7 +87,14 @@ METRIC_FIELDS = [
 ]
 # Reference (cohort) output keeps rmsd_after and adds a unit-cell difference
 # column; phenix output drops rmsd_after.
-FIELDNAMES = ["structure_ref", "structure_mobile", "n_water_ref", "n_water_mobile", *METRIC_FIELDS, "max_cell_diff"]
+FIELDNAMES = [
+    "structure_ref",
+    "structure_mobile",
+    "n_water_ref",
+    "n_water_mobile",
+    *METRIC_FIELDS,
+    "max_cell_diff",
+]
 PHENIX_FIELDNAMES = [
     "reference",
     "predictor",
@@ -112,7 +119,9 @@ def clean_phenix_waters(raw_path, pdb_id, *, distance_filter, filter_cutoff):
         return cleaned, load_structure_waters(cleaned, pdb_id=pdb_id)[["x", "y", "z"]].to_numpy()
     st = gemmi.read_structure(str(raw_path))
     sg = st.find_spacegroup() or gemmi.SpaceGroup("P 1")
-    atoms = pdbx.get_structure(cleaned, model=1, altloc="all", extra_fields=["b_factor", "occupancy"])
+    atoms = pdbx.get_structure(
+        cleaned, model=1, altloc="all", extra_fields=["b_factor", "occupancy"]
+    )
     filtered, *_ = filter_waters(atoms, st.cell, sg, filter_cutoff)
     return cleaned, filtered.coord[water_oxygen_mask(filtered)].astype(float)
 
@@ -157,7 +166,9 @@ def nested_predictors(results_dir: Path, variant: str) -> list[tuple[Path, str, 
             if not refinement_dir.is_dir():
                 continue
             starting_model = refinement_dir.name[len("refined_by_") :].rsplit("_", 1)[0]
-            cifs = sorted(refinement_dir.glob(f"{mtz_source}_refined_by_{starting_model}_{variant}_*.cif"))
+            cifs = sorted(
+                refinement_dir.glob(f"{mtz_source}_refined_by_{starting_model}_{variant}_*.cif")
+            )
             if cifs:
                 records.append((cifs[-1], mtz_source, starting_model))
             else:
@@ -207,7 +218,9 @@ def all_pairs_rows(ids, proteins, coords, cells, mobile_cifs, cutoff, tag="") ->
                 }
             )
             if np.isnan(metrics["n_common_ca"]):
-                logger.warning(f"  {prefix}ref {structure_ref} <- mobile {structure_mobile}: alignment skipped (too few common Cα)")
+                logger.warning(
+                    f"  {prefix}ref {structure_ref} <- mobile {structure_mobile}: alignment skipped (too few common Cα)"
+                )
             else:
                 logger.info(
                     f"  {prefix}ref {structure_ref} <- mobile {structure_mobile}: "
@@ -243,7 +256,8 @@ def run_cohort(args) -> None:
     # Load each structure once: protein (alignment reference), water coords, cell.
     proteins = {pdb_id: load_protein(cif_paths[pdb_id])[0] for pdb_id in found}
     coords = {
-        pdb_id: load_structure_waters(cif_paths[pdb_id])[["x", "y", "z"]].to_numpy() for pdb_id in found
+        pdb_id: load_structure_waters(cif_paths[pdb_id])[["x", "y", "z"]].to_numpy()
+        for pdb_id in found
     }
     cells = {pdb_id: gemmi.read_structure(str(cif_paths[pdb_id])).cell for pdb_id in found}
 
@@ -276,7 +290,9 @@ def run_self_refined(args) -> None:
     cross-refinement matrices against."""
     results_dir: Path = args.results_dir
     if results_dir is None or not results_dir.is_dir():
-        logger.error(f"--self-refined needs --results-dir pointing at a refinement_results tree: {results_dir}")
+        logger.error(
+            f"--self-refined needs --results-dir pointing at a refinement_results tree: {results_dir}"
+        )
         sys.exit(1)
 
     out_dir = results_dir.parent
@@ -285,7 +301,9 @@ def run_self_refined(args) -> None:
     logger.info(f"Results dir: {results_dir}")
     logger.info(f"Variants:    {variants}")
     logger.info(f"Cutoff:      {args.cutoff} Å")
-    logger.info(f"Water filter: {f'on (≤ {args.filter_cutoff} Å to protein)' if distance_filter else 'off'}")
+    logger.info(
+        f"Water filter: {f'on (≤ {args.filter_cutoff} Å to protein)' if distance_filter else 'off'}"
+    )
 
     for variant in variants:
         cif_paths = self_refined_cifs(results_dir, variant)
@@ -329,19 +347,25 @@ def run_phenix(args) -> None:
     # (--results-dir); each CIF is cleaned (read_phenix_cif) and its waters
     # distance-filtered on the fly, so no pre-filtered dir is needed.
     if args.results_dir is None or not args.results_dir.is_dir():
-        logger.error(f"--phenix needs --results-dir pointing at a refinement_results tree: {args.results_dir}")
+        logger.error(
+            f"--phenix needs --results-dir pointing at a refinement_results tree: {args.results_dir}"
+        )
         sys.exit(1)
     results_dir = args.results_dir
     out_dir = results_dir.parent
     variants = [args.variant] if args.variant else discover_variants(results_dir)
 
     distance_filter = not args.no_filter
-    ref_source = "self-refined <a>_refined_by_<a>" if args.ref_from_self_refined else f"deposited {ref_dir}"
+    ref_source = (
+        "self-refined <a>_refined_by_<a>" if args.ref_from_self_refined else f"deposited {ref_dir}"
+    )
     logger.info(f"Reference:      {ref_source}")
     logger.info(f"Predictor dir:  {results_dir}")
     logger.info(f"Variants:       {variants}")
     logger.info(f"Cutoff:         {args.cutoff} Å")
-    logger.info(f"Water filter:   {f'on (≤ {args.filter_cutoff} Å to protein)' if distance_filter else 'off'}")
+    logger.info(
+        f"Water filter:   {f'on (≤ {args.filter_cutoff} Å to protein)' if distance_filter else 'off'}"
+    )
 
     for variant in variants:
         records = nested_predictors(results_dir, variant)
@@ -370,11 +394,16 @@ def run_phenix(args) -> None:
         for a in present:
             if ref_clean:
                 ref_objs[a], ref_coords[a] = clean_phenix_waters(
-                    ref_srcs[a], a, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
+                    ref_srcs[a],
+                    a,
+                    distance_filter=distance_filter,
+                    filter_cutoff=args.filter_cutoff,
                 )
             else:
                 ref_objs[a] = ref_srcs[a]
-                ref_coords[a] = load_structure_waters(ref_srcs[a], pdb_id=a)[["x", "y", "z"]].to_numpy()
+                ref_coords[a] = load_structure_waters(ref_srcs[a], pdb_id=a)[
+                    ["x", "y", "z"]
+                ].to_numpy()
         ref_proteins = {a: load_protein(ref_objs[a])[0] for a in present}
 
         rows = []
@@ -383,10 +412,17 @@ def run_phenix(args) -> None:
                 continue
             # Raw phenix output → clean + distance-filter on the fly.
             predictor, pred_coords = clean_phenix_waters(
-                cif_path, mtz_source, distance_filter=distance_filter, filter_cutoff=args.filter_cutoff
+                cif_path,
+                mtz_source,
+                distance_filter=distance_filter,
+                filter_cutoff=args.filter_cutoff,
             )
             metrics = compute_pair_metrics(
-                ref_coords[starting_model], ref_proteins[starting_model], predictor, pred_coords, args.cutoff
+                ref_coords[starting_model],
+                ref_proteins[starting_model],
+                predictor,
+                pred_coords,
+                args.cutoff,
             )
             rows.append(
                 {
@@ -398,14 +434,20 @@ def run_phenix(args) -> None:
                 }
             )
             if np.isnan(metrics["n_common_ca"]):
-                logger.warning(f"  [{variant}] ref {starting_model} <- {mtz_source}: alignment skipped (too few common Cα)")
+                logger.warning(
+                    f"  [{variant}] ref {starting_model} <- {mtz_source}: alignment skipped (too few common Cα)"
+                )
             else:
                 logger.info(
                     f"  [{variant}] ref {starting_model} <- {mtz_source}: "
                     f"P={metrics['precision']:.3f} R={metrics['recall']:.3f} CD={metrics['chamfer']:.3f}"
                 )
 
-        _kind = "phenix_pairwise_metrics_selfref" if args.ref_from_self_refined else "phenix_pairwise_metrics"
+        _kind = (
+            "phenix_pairwise_metrics_selfref"
+            if args.ref_from_self_refined
+            else "phenix_pairwise_metrics"
+        )
         out_path = (
             args.output
             if (args.output and len(variants) == 1)

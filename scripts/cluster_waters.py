@@ -123,9 +123,7 @@ def main() -> None:
         if args.min_cluster_size is not None
         else config.HDBSCAN_MIN_CLUSTER_SIZE
     )
-    min_samples = (
-        args.min_samples if args.min_samples is not None else config.HDBSCAN_MIN_SAMPLES
-    )
+    min_samples = args.min_samples if args.min_samples is not None else config.HDBSCAN_MIN_SAMPLES
 
     logger.info(f"Cohort:           {cohort_id}")
     logger.info(

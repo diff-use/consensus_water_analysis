@@ -186,9 +186,7 @@ def _mean_best_jaccard(
         best_jaccard_per_alternate: list[float] = []
         for alternate_labels, alternate_sizes in alternate_clusterings:
             best_jaccard = 0.0
-            overlapping_ids, overlaps = np.unique(
-                alternate_labels[base_points], return_counts=True
-            )
+            overlapping_ids, overlaps = np.unique(alternate_labels[base_points], return_counts=True)
             for alternate_id, overlap in zip(overlapping_ids, overlaps, strict=True):
                 alternate_id = int(alternate_id)
                 if alternate_id < 0:
@@ -197,9 +195,7 @@ def _mean_best_jaccard(
                 best_jaccard = max(best_jaccard, overlap / union)
             best_jaccard_per_alternate.append(best_jaccard)
         stability[int(cluster_id)] = (
-            float(np.mean(best_jaccard_per_alternate))
-            if best_jaccard_per_alternate
-            else 1.0
+            float(np.mean(best_jaccard_per_alternate)) if best_jaccard_per_alternate else 1.0
         )
     return stability
 
@@ -209,7 +205,7 @@ def _hdbscan_candidate_grid(n_total_structures: int) -> list[tuple[int, int]]:
 
     min_cluster_size is an absolute detection floor in waters (~= structures agreeing), not a
     fraction of the cohort — else the cluster_occupancy distribution would be pre-truncated. It
-    caps at 20 and drops 3 for larger cohorts, and never exceeds the cohort size. 
+    caps at 20 and drops 3 for larger cohorts, and never exceeds the cohort size.
     min_samples estimates local core density, and capped at min_cluster_size is HDBSCAN's most
     conservative default, as larger values are more likely to add noise.
     """
