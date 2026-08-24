@@ -326,7 +326,10 @@ def _(Path, mo):
         if with_dpi:
             ui["dpi"] = mo.ui.number(start=72, stop=1200, step=1, value=300, label="dpi")
         ui["save"] = mo.ui.run_button(label=button_label)
-        return ui
+        # mo.ui.dictionary, not a plain dict: marimo binds a cell's dependencies by
+        # scanning globals for UIElement instances, so elements hidden inside a plain
+        # container are invisible to the graph and clicking save re-runs nothing.
+        return mo.ui.dictionary(ui)
 
 
     def show_controls(*uis):
@@ -974,7 +977,7 @@ def _(mo, structure_numeric_cols):
         label="split metric (good = ≥ cohort cutoff)",
     )
     _dist_default = [
-        m for m in ["resolution", "deposited_r_free"] if m in structure_numeric_cols
+        m for m in ["resolution", "r_free"] if m in structure_numeric_cols
     ]
     structure_dist_metrics = mo.ui.multiselect(
         options=structure_numeric_cols,
