@@ -745,7 +745,7 @@ def _(mo):
 
 @app.cell
 def _(mo, waters):
-    _candidates = ["b_factor_zscore", "edia", "b_factor", "occupancy", "muse_score"]
+    _candidates = ["b_factor_zscore", "edia", "b_factor", "occupancy"]
     _available = [
         c for c in _candidates if c in waters.columns and waters[c].notna().any()
     ]

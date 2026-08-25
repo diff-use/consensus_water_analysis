@@ -359,7 +359,7 @@ def _(mo):
 
 @app.cell
 def _(cluster_members, mo):
-    _candidates = ["b_factor", "edia", "muse_score", "occupancy", "b_factor_zscore"]
+    _candidates = ["b_factor", "edia", "occupancy", "b_factor_zscore"]
     _available = [
         c for c in _candidates
         if c in cluster_members.columns and cluster_members[c].notna().any()

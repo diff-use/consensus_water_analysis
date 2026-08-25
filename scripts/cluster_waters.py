@@ -110,11 +110,7 @@ def main() -> None:
         aligned_dir,
         edia_dir=config.ALL_PDB_REDO_DIR,
         edia_template=config.EDIA_TEMPLATE,
-        muse_dir=config.MUSE_DIR,
-        muse_template=config.MUSE_TEMPLATE,
-        cohort_id=cohort_id,
     )
-    n_muse = sum(1 for _, _, muse in cif_json_pairs if muse is not None)
 
     n_total = len(member_ids)
     n_found = len(cif_json_pairs)
@@ -129,7 +125,6 @@ def main() -> None:
     logger.info(
         f"Members:          {n_total} total — {n_found} aligned CIFs found, {n_total - n_found} missing"
     )
-    logger.info(f"MUSE scores:      {n_muse}/{n_found} structures have a MUSE CSV")
     logger.info(f"Input:            {aligned_dir}")
     logger.info(f"Output:           {out_dir}")
     min_cluster_size_source = "override" if args.min_cluster_size is not None else "config"

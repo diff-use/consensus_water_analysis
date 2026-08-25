@@ -94,9 +94,6 @@ def main() -> None:
         aligned_dir,
         edia_dir=config.ALL_PDB_REDO_DIR,
         edia_template=config.EDIA_TEMPLATE,
-        muse_dir=config.MUSE_DIR,
-        muse_template=config.MUSE_TEMPLATE,
-        cohort_id=cohort_id,
     )
 
     n_total = len(member_ids)

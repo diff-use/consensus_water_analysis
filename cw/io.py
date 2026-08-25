@@ -9,10 +9,6 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-# Altloc values PSEUDO treats as "no altloc" when generating MUSE scores.
-# "." is biotite's altloc_id for a water with no alternate conformers.
-MUSE_VALID_ALTLOCS: frozenset[str] = frozenset({"\x00", " ", "A", "", "."})
-
 # ── utilities ─────────────────────────────────────────────────────────────────
 
 
@@ -231,49 +227,20 @@ def _attach_edia(
     return df
 
 
-def _attach_muse(df: pd.DataFrame, muse_csv: Path) -> pd.DataFrame:
-    """Merge MUSE scores into df from a per-structure CSV.
-
-    MUSE scores are atom-level but keyed without altloc. The join is on
-    (chain_id, res_id, ins_code), which fans the score to all altloc variants
-    of a residue; muse_score is then nulled for altlocs outside MUSE_VALID_ALTLOCS.
-
-    df must still contain ins_code. Adds a 'muse_score' column.
-    """
-    if not muse_csv.exists():
-        df["muse_score"] = float("nan")
-        return df
-
-    muse = pd.read_csv(muse_csv)
-    muse = muse[muse["is_water"] == True].copy()  # noqa: E712
-    muse["ins_code"] = muse["insertion_code"].apply(normalize_ins_code)
-    muse = muse.rename(columns={"residue_seq_id": "res_id"})[
-        ["chain_id", "res_id", "ins_code", "score"]
-    ]
-
-    df = df.merge(muse, on=["chain_id", "res_id", "ins_code"], how="left")
-    df = df.rename(columns={"score": "muse_score"})
-
-    df.loc[~df["altloc"].isin(MUSE_VALID_ALTLOCS), "muse_score"] = float("nan")
-
-    return df
-
-
 def load_structure_waters(
     cif_path: Path | pdbx.CIFFile,
     json_path: Path | None = None,
-    muse_csv: Path | None = None,
     pdb_id: str | None = None,
 ) -> pd.DataFrame:
-    """Load water O records from one CIF, optionally attaching EDIA and MUSE scores.
+    """Load water O records from one CIF, optionally attaching EDIA scores.
 
-    Reads the CIF once with altloc='all'. EDIA and MUSE are joined while ins_code
-    is still present, then ins_code is dropped before returning.
+    Reads the CIF once with altloc='all'. EDIA is joined while ins_code is still
+    present, then ins_code is dropped before returning.
 
     cif_path may be a Path or an already-loaded CIFFile; pass pdb_id explicitly
     in the latter case.
 
-    Columns: pdb_id, chain_id, res_id, altloc, x, y, z, b_factor, occupancy, edia[, muse_score]
+    Columns: pdb_id, chain_id, res_id, altloc, x, y, z, b_factor, occupancy, edia
     """
     if isinstance(cif_path, Path):
         pdb_id = pdb_id if pdb_id is not None else cif_path.stem.removesuffix("_final")
@@ -304,9 +271,6 @@ def load_structure_waters(
     else:
         df["edia"] = float("nan")
 
-    if muse_csv is not None:
-        df = _attach_muse(df, muse_csv)
-
     return df.drop(columns=["ins_code"])
 
 
@@ -316,40 +280,36 @@ def resolve_aligned_water_inputs(
     *,
     edia_dir: Path | str,
     edia_template: str,
-    muse_dir: Path | str,
-    muse_template: str,
-    cohort_id: str,
-) -> list[tuple[Path, Path | None, Path | None]]:
-    """Resolve (aligned_cif, edia_json, muse_csv) triples for members with an aligned CIF.
+) -> list[tuple[Path, Path | None]]:
+    """Resolve (aligned_cif, edia_json) pairs for members with an aligned CIF.
 
     Members without an aligned CIF in aligned_dir are skipped, so the returned list length is
-    the count of members actually found. The edia / muse entry of a triple is None when that
-    score file is absent for the member. The result feeds straight into collect_aligned_waters.
+    the count of members actually found. The edia entry of a pair is None when that score
+    file is absent for the member. The result feeds straight into collect_aligned_waters.
     """
-    pairs: list[tuple[Path, Path | None, Path | None]] = []
+    pairs: list[tuple[Path, Path | None]] = []
     for member_id in member_ids:
         cif = Path(aligned_dir) / f"{member_id}.cif"
         if not cif.exists():
             continue
         edia = Path(edia_dir) / edia_template.format(pdb_id=member_id)
-        muse = Path(muse_dir) / muse_template.format(cohort=cohort_id, pdb_id=member_id)
-        pairs.append((cif, edia if edia.exists() else None, muse if muse.exists() else None))
+        pairs.append((cif, edia if edia.exists() else None))
     return pairs
 
 
 def collect_aligned_waters(
-    cif_json_pairs: list[tuple[Path, Path | None, Path | None]],
+    cif_json_pairs: list[tuple[Path, Path | None]],
     *,
     out_path: Path | None = None,
 ) -> pd.DataFrame:
     """Concatenate water records from aligned CIFs into one DataFrame.
 
-    Each element of cif_json_pairs is (aligned_cif, edia_json_path, muse_csv),
-    where edia_json_path / muse_csv may be None if that score is unavailable
-    for the structure. If out_path is given the result is also written to CSV
-    before returning.
+    Each element of cif_json_pairs is (aligned_cif, edia_json_path), where
+    edia_json_path may be None if the EDIA score is unavailable for the
+    structure. If out_path is given the result is also written to CSV before
+    returning.
     """
-    frames = [load_structure_waters(cif, json, muse) for cif, json, muse in cif_json_pairs]
+    frames = [load_structure_waters(cif, json) for cif, json in cif_json_pairs]
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
