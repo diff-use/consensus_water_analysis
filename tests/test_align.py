@@ -1,31 +1,9 @@
-import importlib.util
-import sys
-from pathlib import Path
-
 import biotite.structure.io.pdbx as pdbx
-import gemmi
 import numpy as np
 import pytest
 
 from cw.align import align_to_reference, kabsch
 from cw.io import load_protein
-
-_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "phenix" / "align_starting_model.py"
-
-
-def _load_align_script():
-    spec = importlib.util.spec_from_file_location("align_starting_model", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _mtz(pdb_id: str):
-    p = Path(__file__).parent / "fixtures" / pdb_id / f"{pdb_id}_final.mtz"
-    if not p.exists():
-        pytest.skip(f"MTZ fixture missing — copy to {p}")
-    return p
-
 
 # ── kabsch (pure math, no fixtures) ───────────────────────────────────────────
 
@@ -94,54 +72,3 @@ def test_align_5f16_to_6ybf(cif_path_6ybf, cif_path_5f16, tmp_path):
 
     assert prot_after == prot_before, f"protein atom count changed: {prot_before} → {prot_after}"
     assert water_after == water_before, f"water count changed: {water_before} → {water_after}"
-
-
-# ── align_starting_model.py CLI ──────────────────────────────────────────────
-
-
-def test_align_starting_model_cli(cif_path_6ybf, cif_path_5f16, tmp_path, monkeypatch, capsys):
-    mod = _load_align_script()
-    out = tmp_path / "5f16_aligned.cif"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "align_starting_model.py",
-            "--mobile",
-            str(cif_path_5f16),
-            "--reference",
-            str(cif_path_6ybf),
-            "--out",
-            str(out),
-            "--pdb-id",
-            "6ybf",
-            "--ref-pdb-id",
-            "5f16",
-        ],
-    )
-
-    rc = mod.main()
-
-    assert rc == 0
-    assert out.exists(), "aligned cif was not written"
-    fields = capsys.readouterr().out.strip().splitlines()[-1].split(",")
-    assert fields[0] == "6ybf" and fields[1] == "5f16"
-    assert fields[5] == "aligned"
-    assert float(fields[4]) < float(fields[3]), "rmsd_after not less than rmsd_before"
-
-
-def test_adopt_crystal_symmetry(cif_path_6ybf, cif_path_5f16, tmp_path):
-    mod = _load_align_script()
-    ref_protein, _ = load_protein(cif_path_6ybf)
-    out = tmp_path / "5f16_aligned.cif"
-    report = align_to_reference(cif_path_5f16, ref_protein, out_path=out)
-    assert report is not None
-
-    mtz_path = _mtz("6ybf")
-    mod.adopt_crystal_symmetry(out, mtz_path)
-
-    st = gemmi.read_structure(str(out))
-    mtz = gemmi.read_mtz_file(str(mtz_path))
-    assert st.spacegroup_hm == mtz.spacegroup.hm
-    for got, want in zip(st.cell.parameters, mtz.cell.parameters, strict=True):
-        assert got == pytest.approx(want, abs=1e-3)

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import io
 import json
 from pathlib import Path
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
-import gemmi
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -76,27 +74,6 @@ def find_cohort_metadata(data_dir: Path | str, cohort: str) -> Path | None:
         if "_" not in probe:
             return None
         probe = probe.rsplit("_", 1)[0]
-
-
-def parse_identity(identity: str) -> tuple[str, str, str]:
-    """Split '<mtz_source>_refined_by_<starting_model>_<variant>' into its three parts."""
-    mtz_source, rest = identity.split("_refined_by_", 1)
-    starting_model, variant = rest.rsplit("_", 1)
-    return mtz_source, starting_model, variant
-
-
-def read_phenix_cif(path: Path) -> pdbx.CIFFile:
-    """Read a phenix refinement CIF into a clean single-block biotite CIFFile.
-
-    Phenix output CIFs embed an `_atom_type` loop with multi-line (`;`-delimited)
-    text values that biotite 1.4's reader cannot parse — it silently drops
-    `atom_site` — and append monomer-restraint data blocks. gemmi parses them
-    fine, so round-tripping through gemmi's mmCIF writer yields a clean
-    single-block document biotite can read. Water altlocs and occupancies are
-    preserved through the round-trip.
-    """
-    st = gemmi.read_structure(str(path))
-    return pdbx.CIFFile.read(io.StringIO(st.make_mmcif_document().as_string()))
 
 
 def water_oxygen_mask(atoms: struc.AtomArray) -> np.ndarray:
@@ -293,8 +270,8 @@ def load_structure_waters(
     Reads the CIF once with altloc='all'. EDIA and MUSE are joined while ins_code
     is still present, then ins_code is dropped before returning.
 
-    cif_path may be a Path or an already-loaded CIFFile (e.g. a phenix CIF
-    pre-cleaned via read_phenix_cif); pass pdb_id explicitly in the latter case.
+    cif_path may be a Path or an already-loaded CIFFile; pass pdb_id explicitly
+    in the latter case.
 
     Columns: pdb_id, chain_id, res_id, altloc, x, y, z, b_factor, occupancy, edia[, muse_score]
     """

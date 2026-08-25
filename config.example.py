@@ -4,7 +4,6 @@ EDIA_TEMPLATE = "{pdb_id}/{pdb_id}_final.json" # optional, keep this for PDB-RED
 MUSE_DIR = "/path/to/muse/files" # optional: directory containing MUSE files
 MUSE_TEMPLATE = "{cohort}/{pdb_id}_final/analyse_results/{pdb_id}_final_atoms.csv" # optional: template for MUSE files
 DATA_DIR = "./data"  # output directory for the result folder
-PHENIX_ENV_PATH = ""  # phenix_env.sh to source before re-refinement; empty = assume phenix on PATH
 REF_PDB_ID = "1abc" # PDB ID for alignment reference
 WATER_PROT_DIST_CUTOFF = 4.0 # cutoff distance for water-protein interaction
 EDIA_CUTOFF = None            # min EDIAm to keep a water, e.g. 0.8; None = no EDIA filter
