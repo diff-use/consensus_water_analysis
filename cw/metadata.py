@@ -135,12 +135,6 @@ def resolve_starting_model(entry: dict | None, pdb_id: str = "?") -> tuple[list[
     return [], "missing", "<missing>"
 
 
-def fetch_starting_model(pdb_id: str) -> tuple[list[str], str]:
-    """RCSB lookup for one PDB → ``(codes, status)`` (see ``resolve_starting_model``)."""
-    codes, status, _ = resolve_starting_model(_fetch_rcsb_entry(pdb_id), pdb_id)
-    return codes, status
-
-
 def resolve_deposited_r_factors(entry: dict | None) -> tuple[float | str, float | str]:
     """Deposited R-work and R-free from an RCSB entry JSON's ``refine`` array.
 
