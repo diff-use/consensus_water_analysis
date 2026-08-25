@@ -6,21 +6,23 @@ build-backend = "hatchling.build"
 name = "consensus-water-analysis"
 version = "0.1.0"
 description = "Conserved water analysis from local mmCIF structures"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
-    "biotite",
-    "gemmi",
-    "hdbscan",
-    "joblib",
-    "numpy",
-    "scipy",
-    "pandas",
-    "seaborn",
-    "matplotlib",
-    "tqdm",
-    "pyyaml",
-    "requests",
-    "loguru",
+    "biotite>=1.6",
+    "gemmi>=0.7.5",
+    "hdbscan>=0.8.44",
+    "joblib>=1.5",
+    "numpy>=2.4",
+    "scipy>=1.17",
+    "pandas>=3.0",
+    "seaborn>=0.13.2",
+    "matplotlib>=3.11",
+    "tqdm>=4.68",
+    "pyyaml>=6.0",
+    "requests>=2.32",
+    "loguru>=0.7.3",
 ]
 
 [tool.hatch.build.targets.wheel]
