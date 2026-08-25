@@ -118,6 +118,20 @@ def keep_by_edia(
     return scores > cutoff if exclusive_borderline else scores >= cutoff
 
 
+def bfactor_reference(
+    atoms: struc.AtomArray, water_O_mask: np.ndarray, population: str
+) -> np.ndarray:
+    """B-factors of the z-score reference population: "water" (water O atoms),
+    "protein" (protein heavy atoms) or "all" (every atom)."""
+    if population == "water":
+        return atoms.b_factor[water_O_mask]
+    if population == "protein":
+        return atoms.b_factor[protein_heavy_mask(atoms)]
+    if population == "all":
+        return atoms.b_factor
+    raise ValueError(f"bfactor population must be 'water', 'protein', or 'all', got {population!r}")
+
+
 def keep_by_bfactor(
     atoms: struc.AtomArray,
     water_O_mask: np.ndarray,
@@ -146,16 +160,7 @@ def keep_by_bfactor(
     if mode != "zscore":
         raise ValueError(f"bfactor mode must be 'zscore' or 'absolute', got {mode!r}")
 
-    if population == "water":
-        ref = water_b
-    elif population == "protein":
-        ref = atoms.b_factor[protein_heavy_mask(atoms)]
-    elif population == "all":
-        ref = atoms.b_factor
-    else:
-        raise ValueError(
-            f"bfactor population must be 'water', 'protein', or 'all', got {population!r}"
-        )
+    ref = bfactor_reference(atoms, water_O_mask, population)
 
     std = ref.std()
     if std == 0:
