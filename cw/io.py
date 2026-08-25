@@ -11,6 +11,12 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from cw.metrics import (
+    consensus_centers,
+    consensus_water_mask,
+    per_structure_consensus_pr,
+)
+
 # Altloc values PSEUDO treats as "no altloc" when generating MUSE scores.
 # "." is biotite's altloc_id for a water with no alternate conformers.
 MUSE_VALID_ALTLOCS: frozenset[str] = frozenset({"\x00", " ", "A", "", "."})
@@ -97,6 +103,49 @@ def read_phenix_cif(path: Path) -> pdbx.CIFFile:
     """
     st = gemmi.read_structure(str(path))
     return pdbx.CIFFile.read(io.StringIO(st.make_mmcif_document().as_string()))
+def load_cohort_frames(data_dir, cohort, cutoff, match_radius, suffix=""):
+    """(per-water frame, per-structure frame, one-line summary) for one cohort.
+
+    Both frames carry a `cohort` column and a `group` column holding the split
+    label, resolved here because each cohort has its own cluster ids, occupancies
+    and consensus centers. A water is consensus iff it is a within-cutoff member of
+    a cluster whose occupancy clears `cutoff`. `suffix` selects a member-radius
+    variant of the CSVs (e.g. "_0.5"); "" reads the default pair.
+    """
+    directory = Path(data_dir) / cohort
+    clusters = pd.read_csv(directory / f"clusters{suffix}.csv")
+    members = pd.read_csv(directory / f"cluster_members{suffix}.csv")
+
+    is_consensus = consensus_water_mask(members, clusters, cutoff)
+    waters = members.assign(
+        group=np.where(is_consensus, "consensus", "nonconsensus"),
+        cohort=cohort,
+    )
+
+    # Per-structure precision/recall/f1/num_water against the consensus centers,
+    # joined to deposited metadata. The merge renames metadata's own num_water to
+    # num_water_deposited so the clustered count stays the plain num_water;
+    # metadata scalars can carry "<missing>" strings, so coerce to numeric.
+    centers = consensus_centers(clusters, cutoff)
+    pr = per_structure_consensus_pr(members, centers, match_radius)
+    meta_path = find_cohort_metadata(data_dir, cohort)
+    if meta_path is None:
+        structures, note = pr, "no metadata.csv found"
+    else:
+        meta = pd.read_csv(meta_path)
+        scalars = [c for c in meta.columns if c != "pdb_id"]
+        meta[scalars] = meta[scalars].apply(pd.to_numeric, errors="coerce")
+        structures = pr.merge(meta, on="pdb_id", how="left", suffixes=("", "_deposited"))
+        matched = int(pr["pdb_id"].isin(meta["pdb_id"]).sum())
+        note = f"metadata {meta_path.parent.name}/ ({matched}/{len(pr)} matched)"
+
+    n_consensus = int((waters["group"] == "consensus").sum())
+    summary = (
+        f"{cohort}: {len(members)} waters, {n_consensus} consensus / "
+        f"{len(members) - n_consensus} non-consensus, {len(clusters)} clusters, "
+        f"{len(pr)} structures, {note}"
+    )
+    return waters, structures.assign(cohort=cohort), summary
 
 
 def water_oxygen_mask(atoms: struc.AtomArray) -> np.ndarray:
