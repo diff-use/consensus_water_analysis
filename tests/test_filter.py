@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from scipy.spatial.distance import cdist
 
-from cw.filter import best_sym_positions, filter_waters, keep_by_bfactor
+from cw.filter import best_sym_positions, bfactor_reference, filter_waters, keep_by_bfactor
 from cw.io import (
     edia_scores_in_order,
     load_edia_all_altlocs,
@@ -250,6 +250,40 @@ def test_keep_by_bfactor_zscore_keeps_lowest_and_honours_population(cif_path_6yb
 
     masks = [keep_by_bfactor(atoms, mask, 0.5, population=p) for p in ("water", "protein", "all")]
     assert any(not np.array_equal(masks[0], m) for m in masks[1:])
+
+
+def test_bfactor_reference_selects_the_named_population(cif_path_6ybf):
+    """Each population name selects a different set of B-factors: waters are the water
+    O atoms, "all" is every atom, and protein sits between them. An unknown name is an
+    error rather than a silent fallback."""
+    atoms = _load_atoms(cif_path_6ybf)
+    mask = water_oxygen_mask(atoms)
+
+    water = bfactor_reference(atoms, mask, "water")
+    protein = bfactor_reference(atoms, mask, "protein")
+    every = bfactor_reference(atoms, mask, "all")
+
+    assert np.array_equal(water, atoms.b_factor[mask])
+    assert np.array_equal(every, atoms.b_factor)
+    assert len(water) < len(every) and len(protein) < len(every)
+    assert water.mean() != protein.mean()  # the choice actually changes the reference
+
+    with pytest.raises(ValueError, match="water.*protein.*all"):
+        bfactor_reference(atoms, mask, "solvent")
+
+
+def test_bfactor_reference_matches_keep_by_bfactor(cif_path_6ybf):
+    """keep_by_bfactor's z-score is built on bfactor_reference, so standardizing by
+    hand against the same population reproduces its keep-set exactly."""
+    atoms = _load_atoms(cif_path_6ybf)
+    mask = water_oxygen_mask(atoms)
+    water_b = atoms.b_factor[mask]
+    cutoff = 0.5
+
+    for population in ("water", "protein", "all"):
+        ref = bfactor_reference(atoms, mask, population)
+        expected = (water_b - ref.mean()) / ref.std() <= cutoff
+        assert np.array_equal(keep_by_bfactor(atoms, mask, cutoff, population=population), expected)
 
 
 def test_keep_by_bfactor_degenerate_population_keeps_all(cif_path_6ybf):
