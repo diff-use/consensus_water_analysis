@@ -12,13 +12,20 @@ marimo notebooks (`.py`, run with `uv run marimo edit <path>`). They read the pr
 
 ## Setup
 
-1. Copy and edit the config:
+1. Install the environment. Needs [uv](https://docs.astral.sh/uv/) >= 0.11.21 (the version
+   that wrote `uv.lock`; older uv cannot read its revision) and Python 3.12 or 3.13:
+   ```
+   uv sync --locked
+   ```
+   `--locked` installs the exact versions in `uv.lock` and fails if the lock has drifted.
+
+2. Copy and edit the config:
    ```
    cp config.example.py config.py
    ```
    Set `ALL_PDB_REDO_DIR` to the local mirror root and `REF_PDB_ID` to the reference structure.
 
-2. Activate the environment:
+3. Activate the environment:
    ```
    source .venv/bin/activate
    ```
