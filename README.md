@@ -277,7 +277,8 @@ marimo notebooks (`.py`, run with `uv run marimo edit <path>`). They read the pr
 
 ## Additional helper scripts
 
-- `scripts/pairwise_water_metrics.py` — pairwise agreement metrics (precision / recall / F1 / chamfer) between the water sets of every ordered pair of cohort members.
+- `scripts/pairwise_water_metrics.py` — pairwise agreement metrics (precision / recall / F1 / chamfer) between water sets, in cohort, self-refined, or phenix modes.
+- `scripts/phenix/` — phenix re-refinement workflows (batch re-refinement, starting-model alignment, log parsing) used to generate the re-refined CIFs some analyses compare against.
   ```
   uv run scripts/pairwise_water_metrics.py pdb_ids.txt [--input-dir DIR] [--cutoff A] [-o CSV]
   ```
