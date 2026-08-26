@@ -119,7 +119,7 @@ PARTITION_FIELDNAMES = [
 def clean_phenix_waters(raw_path, pdb_id, *, distance_filter, filter_cutoff):
     """Clean a raw phenix CIF and return (cleaned_cif, water_coords).
 
-    read_phenix_cif normalises the raw phenix output so biotite can read it. When
+    read_phenix_cif normalizes the raw phenix output so biotite can read it. When
     distance_filter, the waters are then symmetry-aware distance-filtered to within
     filter_cutoff Å of protein (cw.filter.filter_waters, each structure's own
     cell / space group) — matching how the deposited references were filtered — so

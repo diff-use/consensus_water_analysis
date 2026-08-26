@@ -402,7 +402,7 @@ def make_panels(
     Two styling modes:
 
     - `specs` given — a {label: {label, cmap, vmin, vmax}} registry drives each
-      panel's title/colour map/range individually (per-metric panels). `shared_cbar`
+      panel's title/color map/range individually (per-metric panels). `shared_cbar`
       is ignored; each panel keeps its own colorbar. A spec may carry a per-panel
       `mask_upper` (and `mask_diagonal`) flag overriding the make_panels default, so
       only the symmetric-metric panels are folded to the lower triangle.
@@ -422,7 +422,7 @@ def make_panels(
     meanings — e.g. predictor / ground-truth on the pairwise panels and mtz / starting
     model on the cross panels.
 
-    `vmin` / `vmax` (non-`specs` mode) override the colour limits: each, when not None,
+    `vmin` / `vmax` (non-`specs` mode) override the color limits: each, when not None,
     replaces the corresponding auto value (per-panel autoscale, or the `shared_range`
     bound under `shared_cbar`). Either bound can be set independently — e.g. pin
     `vmax=1.0` while letting `vmin` follow the data.
@@ -538,12 +538,12 @@ def make_panel_grid(
 
     `rows` is an ordered mapping `{row_key: {panel_label: matrix}}`; every row must carry
     the same `panel_label`s (the columns). Each row gets its **own shared colorbar and
-    colour scale** — rows are typically different metrics with different units/ranges, so
+    color scale** — rows are typically different metrics with different units/ranges, so
     they are never pooled onto one scale. Column **titles are drawn on the top row only**;
     lower rows repeat the columns without titles.
 
     `row_specs` is `{row_key: {cmap, center, cbar_label, vmin, vmax}}` controlling that
-    row's colour map / label / limits; missing keys fall back to viridis / row_key / the
+    row's color map / label / limits; missing keys fall back to viridis / row_key / the
     per-row `shared_range`. `vmin`/`vmax` in a spec override that bound for the row (the
     other stays auto).
 

@@ -206,7 +206,7 @@ def _(mo):
 @app.function
 # Figure-specific drawing. Lives in the notebook, not cw/. Nested helpers keep it
 # self-contained (no cross-cell namespace); the keyword args expose the knobs most
-# worth tweaking — colours, node size, and packing width.
+# worth tweaking — colors, node size, and packing width.
 def make_forest_figure(
     df,
     *,
@@ -253,7 +253,7 @@ def make_forest_figure(
         return children
 
     def layout_tree(roots, children):
-        """Hierarchical layout: leaves get sequential x; a parent is centred
+        """Hierarchical layout: leaves get sequential x; a parent is centered
         over its children; y = -depth."""
         pos = {}
         next_x = [0.0]
