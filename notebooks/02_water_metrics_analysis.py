@@ -79,8 +79,8 @@ def _():
 def _():
     # Deposited as fractions, reported as percentages in the statistics tables.
     PERCENT_METRICS = frozenset({"r_free", "r_work", "deposited_r_free", "deposited_r_work"})
-    # Okabe-Ito, the published colourblind-safe qualitative set. Assigned to cohorts
-    # in fixed positional order and never cycled, so a cohort keeps its colour when
+    # Okabe-Ito, the published colorblind-safe qualitative set. Assigned to cohorts
+    # in fixed positional order and never cycled, so a cohort keeps its color when
     # the cohort list is reordered or shortened.
     COHORT_COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9"]
     return COHORT_COLORS, PERCENT_METRICS
@@ -302,7 +302,7 @@ def _(mo):
     ## Figure builders
 
     A **split spec** — `{col, left, right}` with each side carrying its `value` in
-    that column plus its label and colours — defines a comparison once and is then
+    that column plus its label and colors — defines a comparison once and is then
     shared by that level's violin, Q-Q and statistics sections, so the three cannot
     drift apart. Both builders draw only; every statistic lives in a statistics
     section.
@@ -778,12 +778,12 @@ def _(
     structure_split_spec,
     structures,
 ):
-    # Labelled once here and shared by all three per-structure sections. Structures
+    # Labeled once here and shared by all three per-structure sections. Structures
     # whose split metric is missing are dropped from both groups.
     split_metric = structure_split_metric.value
     split_cutoffs = structure_cutoffs.value
     _base = structures.dropna(subset=[split_metric])
-    structures_labelled = _base.assign(
+    structures_labeled = _base.assign(
         group=np.where(
             _base[split_metric] >= _base["cohort"].map(split_cutoffs), "good", "poor",
         )
@@ -792,13 +792,13 @@ def _(
 
     print(f"split on {split_metric} at each cohort's own cutoff:")
     for _cohort in COHORTS:
-        _rows = structures_labelled[structures_labelled["cohort"] == _cohort]
+        _rows = structures_labeled[structures_labeled["cohort"] == _cohort]
         print(
             f"  {_cohort}: cutoff {split_cutoffs.get(_cohort):.4g} → "
             f"{int((_rows['group'] == 'good').sum())} good (≥), "
             f"{int((_rows['group'] == 'poor').sum())} poor (<)"
         )
-    return STRUCTURE_SPLIT, split_cutoffs, split_metric, structures_labelled
+    return STRUCTURE_SPLIT, split_cutoffs, split_metric, structures_labeled
 
 
 @app.cell
@@ -830,10 +830,10 @@ def _(
     save_figure,
     structure_dist_metrics,
     structure_violin_save,
-    structures_labelled,
+    structures_labeled,
 ):
     _fig = make_violin_figure(
-        structures_labelled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
+        structures_labeled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
         STRUCTURE_SPLIT, METRIC_LABELS, legend_loc="upper left", **VIOLIN_STYLE,
     )
     save_figure(_fig, structure_violin_save)
@@ -880,10 +880,10 @@ def _(
     save_figure,
     structure_dist_metrics,
     structure_qq_save,
-    structures_labelled,
+    structures_labeled,
 ):
     _fig, structure_qq_fits = make_qq_figure(
-        structures_labelled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
+        structures_labeled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
         STRUCTURE_SPLIT, METRIC_LABELS, legend_loc="upper left", **QQ_STYLE,
     )
     save_figure(_fig, structure_qq_save)
@@ -958,14 +958,14 @@ def _(
     structure_stats_run,
     structure_stats_test,
     structure_table_save,
-    structures_labelled,
+    structures_labeled,
 ):
     mo.stop(
         not structure_stats_run.value,
         mo.md("*Tick **compute per-structure statistics** above to run the bootstrap.*"),
     )
     structure_comparison_table = comparison_table(
-        structures_labelled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
+        structures_labeled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
         STRUCTURE_SPLIT, METRIC_LABELS,
         test=structure_stats_test.value, n_boot=int(structure_stats_n_boot.value),
         continuous_split_col=split_metric,

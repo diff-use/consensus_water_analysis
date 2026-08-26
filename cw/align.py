@@ -1,6 +1,5 @@
 """Alignment math: sequence-guided Kabsch superposition of protein structures.
 
-Ported from porting_reference/align_pdbs.py and porting_reference/cluster.py.
 All file I/O (load_protein, write_transformed_cif) lives in cw.io.
 """
 
@@ -37,7 +36,6 @@ def paired_alignment_trace(seq_a: bseq.ProteinSequence, seq_b: bseq.ProteinSeque
 def get_ca_coords_and_sequence(protein: struc.AtomArray) -> tuple[np.ndarray, str]:
     """Extract Cα positions and one-letter sequence in matching order.
 
-    Ported verbatim from align_pdbs.py::get_ca_coords_and_sequence.
     Non-standard residues without a known one-letter code are skipped.
     All protein chains are concatenated (deliberate: superposition uses every Cα).
     """
@@ -58,7 +56,6 @@ def get_paired_ca_positions(
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """BLOSUM62 pairwise alignment → paired Cα coordinate arrays.
 
-    Ported verbatim from align_pdbs.py::get_aligned_ca_positions.
     Returns (mobile_ca_coords, ref_ca_coords, n_paired).
     """
     mob_coords, mob_seq_str = get_ca_coords_and_sequence(mobile)
@@ -73,7 +70,6 @@ def get_paired_ca_positions(
 def kabsch(mobile: np.ndarray, fixed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Kabsch rotation + translation aligning mobile onto fixed.
 
-    Ported verbatim from Vratin's cluster.py::kabsch.
     Returns (R, t) such that R @ mobile.T + t[:,None] ≈ fixed.T.
     """
     mobile_center = mobile.mean(axis=0)

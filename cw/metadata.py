@@ -53,10 +53,7 @@ def _cif_first_float(block: gemmi.cif.Block, tag: str) -> float | str:
 
 
 def _fetch_rcsb_entry(pdb_id: str) -> dict | None:
-    """Fetch RCSB entry JSON. Returns None on 404 or persistent failure.
-
-    Ported from porting_reference/get_starting_models.py::fetch_starting_model.
-    """
+    """Fetch RCSB entry JSON. Returns None on 404 or persistent failure."""
     url = _RCSB_ENTRY_URL.format(pdb_id=pdb_id.lower())
     for attempt in range(3):
         try:
@@ -142,9 +139,12 @@ def resolve_deposited_r_factors(entry: dict | None) -> tuple[float | str, float 
     ``r_work`` / ``r_free`` read out of the on-disk CIF. Returns the first parseable
     value across ``refine`` blocks for each factor, else ``'<missing>'``.
     """
+    if entry is None:
+        return "<missing>", "<missing>"
+    refine_blocks = entry.get("refine") or []
 
     def _first(key: str) -> float | str:
-        for r in entry.get("refine") or []:
+        for r in refine_blocks:
             v = r.get(key)
             if v is not None:
                 try:
@@ -153,8 +153,6 @@ def resolve_deposited_r_factors(entry: dict | None) -> tuple[float | str, float 
                     pass
         return "<missing>"
 
-    if entry is None:
-        return "<missing>", "<missing>"
     return _first("ls_R_factor_R_work"), _first("ls_R_factor_R_free")
 
 
@@ -183,7 +181,7 @@ def resolve_diffrn_temp(entry: dict | None) -> float | str:
 def resolve_crystal_grow(entry: dict | None) -> tuple[float | str, float | str]:
     """``(ph, crystal_grow_temp)`` from an RCSB entry's ``exptl_crystal_grow`` array.
 
-    These are crystallisation conditions — the same category ``experiment_condition``
+    These are crystallization conditions — the same category ``experiment_condition``
     is parsed from — and are distinct from ``diffrn_temp``, which is the temperature
     the diffraction data were collected at. Returns the first parseable value across
     blocks for each field, else ``'<missing>'``.
