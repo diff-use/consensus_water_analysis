@@ -9,16 +9,15 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
       - run: pip install uv
-      # --locked fails if uv.lock has drifted from pyproject.toml, so the CI run
-      # uses exactly the pinned environment.
-      - run: uv sync --locked
-      # config.py is gitignored; nothing under cw/ or tests/ imports it, so the
-      # suite runs on a bare checkout. The committed CIF/EDIA fixtures cover all
-      # but the one MTZ-dependent test, which skips.
-      - run: uv run pytest tests/ -q
+      - run: uv sync --locked --python ${{ matrix.python-version }}
+      - run: uv run --python ${{ matrix.python-version }} pytest tests/ -q

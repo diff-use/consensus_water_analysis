@@ -5,7 +5,7 @@ import pandas as pd
 from scipy import stats
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import maximum_bipartite_matching
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree  # ty: ignore[unresolved-import] (compiled re-export)
 
 
 def precision_recall(
@@ -278,7 +278,7 @@ def compare_halves(
     pdb_id): the bootstrap then resamples whole units, one shared draw per
     iteration so the within-unit split stays paired, and p is inverted from that
     distribution rather than from a test that would count correlated rows as
-    independent — which floors it at 1 / n_boot.
+    independent. An inverted p is a bound, not a measurement: it floors at 1 / n_boot.
     """
     a, b = np.asarray(left_values, dtype=float), np.asarray(right_values, dtype=float)
     keep_a, keep_b = np.isfinite(a), np.isfinite(b)

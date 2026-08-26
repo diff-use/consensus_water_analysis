@@ -77,7 +77,8 @@ def _(mo):
     Default **6YBF** (chosen for its altloc waters).
 
     - gemmi surfaces space group / cell / resolution / unit-cell volume.
-    - gemmi raw-CIF read surfaces `experiment_condition` and `starting_model`.
+    - gemmi raw-CIF read surfaces `r_work` / `r_free` / `ligand_names`; the RCSB Data
+      API supplies `experiment_condition` and `starting_model`.
     - gemmi water-O count agrees with biotite `count_water_oxygens`.
     - EDIA keys (chain, res_id, ins_code) match the water atoms.
     """)

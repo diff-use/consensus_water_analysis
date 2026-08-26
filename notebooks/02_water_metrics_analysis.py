@@ -38,31 +38,38 @@ def _():
     import config
     import numpy as np
     import pandas as pd
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Patch
     from scipy import stats
 
-    from cw.io import find_cohort_metadata
-    from cw.metrics import (
-        compare_halves,
-        consensus_centers,
-        consensus_water_mask,
-        per_structure_consensus_pr,
-        spearman,
+    from cw.io import load_cohort_frames
+    from cw.metrics import compare_halves, spearman
+    from cw.plots import (
+        METRIC_LABELS,
+        WATER_SPLIT,
+        binned_density,
+        despine_axis,
+        finite,
+        make_violin_figure,
+        metric_limits,
+        panel_grid,
+        structure_split_spec,
     )
 
     return (
-        Patch,
+        METRIC_LABELS,
         Path,
+        WATER_SPLIT,
+        binned_density,
         compare_halves,
         config,
-        consensus_centers,
-        consensus_water_mask,
-        find_cohort_metadata,
+        despine_axis,
+        finite,
+        load_cohort_frames,
+        make_violin_figure,
+        metric_limits,
         np,
+        panel_grid,
         pd,
-        per_structure_consensus_pr,
-        plt,
+        structure_split_spec,
         spearman,
         stats,
     )
@@ -70,30 +77,13 @@ def _():
 
 @app.cell
 def _():
-    METRIC_LABELS = {
-        "edia": "EDIA",
-        "b_factor_zscore": "B-factor z-score",
-        "b_factor": "B-factor",
-        "occupancy": "occupancy",
-        "resolution": "resolution (Å)",
-        "deposited_r_free": "deposited R-free",
-        "deposited_r_work": "deposited R-work",
-        "r_free": "R-free",
-        "r_work": "R-work",
-        "num_water": "#water (clustered)",
-        "num_water_deposited": "#water (deposited)",
-        "unit_cell_volume": "unit-cell volume (Å³)",
-        "f1": "F1",
-        "precision": "precision",
-        "recall": "recall",
-    }
     # Deposited as fractions, reported as percentages in the statistics tables.
     PERCENT_METRICS = frozenset({"r_free", "r_work", "deposited_r_free", "deposited_r_work"})
-    # Okabe-Ito, the published colourblind-safe qualitative set. Assigned to cohorts
-    # in fixed positional order and never cycled, so a cohort keeps its colour when
+    # Okabe-Ito, the published colorblind-safe qualitative set. Assigned to cohorts
+    # in fixed positional order and never cycled, so a cohort keeps its color when
     # the cohort list is reordered or shortened.
     COHORT_COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9"]
-    return COHORT_COLORS, METRIC_LABELS, PERCENT_METRICS
+    return COHORT_COLORS, PERCENT_METRICS
 
 
 @app.cell
@@ -130,67 +120,11 @@ def _(mo):
 
 @app.cell
 def _(
-    Path,
-    config,
-    consensus_centers,
-    consensus_water_mask,
-    find_cohort_metadata,
-    np,
-    pd,
-    per_structure_consensus_pr,
-):
-    def load_cohort(cohort, cutoff, match_radius, suffix=""):
-        """(per-water frame, per-structure frame, one-line summary) for one cohort.
-
-        Both frames carry a `cohort` column and a `group` column holding the split
-        label, resolved here because each cohort has its own cluster ids,
-        occupancies and consensus centers. A water is consensus iff it is a
-        within-cutoff member of a cluster whose occupancy clears `cutoff`.
-        """
-        directory = Path(config.DATA_DIR) / cohort
-        clusters = pd.read_csv(directory / f"clusters{suffix}.csv")
-        members = pd.read_csv(directory / f"cluster_members{suffix}.csv")
-
-        is_consensus = consensus_water_mask(members, clusters, cutoff)
-        waters = members.assign(
-            group=np.where(is_consensus, "consensus", "nonconsensus"), cohort=cohort,
-        )
-
-        # Per-structure precision/recall/f1/num_water against the consensus centers,
-        # joined to deposited metadata. The merge renames metadata's own num_water to
-        # num_water_deposited so the clustered count stays the plain num_water;
-        # metadata scalars can carry "<missing>" strings, so coerce to numeric.
-        centers = consensus_centers(clusters, cutoff)
-        pr = per_structure_consensus_pr(members, centers, match_radius)
-        meta_path = find_cohort_metadata(config.DATA_DIR, cohort)
-        if meta_path is None:
-            structures, note = pr, "no metadata.csv found"
-        else:
-            meta = pd.read_csv(meta_path)
-            scalars = [c for c in meta.columns if c != "pdb_id"]
-            meta[scalars] = meta[scalars].apply(pd.to_numeric, errors="coerce")
-            structures = pr.merge(meta, on="pdb_id", how="left", suffixes=("", "_deposited"))
-            matched = int(pr["pdb_id"].isin(meta["pdb_id"]).sum())
-            note = f"metadata {meta_path.parent.name}/ ({matched}/{len(pr)} matched)"
-
-        n_consensus = int((waters["group"] == "consensus").sum())
-        summary = (
-            f"{cohort}: {len(members)} waters, {n_consensus} consensus / "
-            f"{len(members) - n_consensus} non-consensus, {len(clusters)} clusters, "
-            f"{len(pr)} structures, {note}"
-        )
-        return waters, structures.assign(cohort=cohort), summary
-
-    return (load_cohort,)
-
-
-@app.cell
-def _(
     cohort_labels_input,
     cohorts_input,
     config,
     cutoff_input,
-    load_cohort,
+    load_cohort_frames,
     mo,
     pd,
 ):
@@ -211,7 +145,9 @@ def _(
     )
 
     _loaded = [
-        load_cohort(_cohort, float(cutoff_input.value), _match_radius, _suffix)
+        load_cohort_frames(
+            config.DATA_DIR, _cohort, float(cutoff_input.value), _match_radius, _suffix
+        )
         for _cohort in COHORTS
     ]
     for *_, _summary in _loaded:
@@ -361,185 +297,17 @@ def _(Path, mo):
 
 
 @app.cell
-def _(np, plt):
-    def finite(values):
-        """`values` as a float array with NaN/inf dropped."""
-        values = np.asarray(values, dtype=float)
-        return values[np.isfinite(values)]
-
-
-    def binned_density(values, edges):
-        """Raw binned density (area = 1, no kernel smoothing) aligned to bin
-        centers, so a violin silhouette is the actual distribution rather than a
-        KDE. All-zeros for empty input."""
-        values = finite(values)
-        if values.size == 0:
-            return np.zeros(len(edges) - 1)
-        return np.histogram(values, bins=edges, density=True)[0]
-
-
-    def metric_limits(values, clamp):
-        """Non-degenerate (lo, hi) display range: the full range, or 0–99.9 pct
-        when clamped."""
-        values = finite(values)
-        if values.size == 0:
-            return 0.0, 1.0
-        lo, hi = (
-            (float(np.quantile(values, 0.0)), float(np.quantile(values, 0.999)))
-            if clamp else (float(values.min()), float(values.max()))
-        )
-        return lo, hi if hi > lo else lo + 1.0
-
-
-    def panel_grid(n, panel_w, panel_h, gutters, vertical):
-        """`n` panels of a fixed data-rectangle size in one column (`vertical`) or
-        one row, so a figure is identical across runs. `gutters` is
-        (left, right, top, bottom, gap) in inches. Returns (fig, axes)."""
-        left, right, top, bottom, gap = gutters
-        if vertical:
-            fig_w = left + panel_w + right
-            fig_h = bottom + n * panel_h + (n - 1) * gap + top
-            spacing = {"hspace": gap / panel_h}
-        else:
-            fig_w = left + n * panel_w + (n - 1) * gap + right
-            fig_h = bottom + panel_h + top
-            spacing = {"wspace": gap / panel_w}
-        fig, axes = plt.subplots(
-            *((n, 1) if vertical else (1, n)), figsize=(fig_w, fig_h), squeeze=False,
-        )
-        fig.subplots_adjust(
-            left=left / fig_w, right=1 - right / fig_w,
-            bottom=bottom / fig_h, top=1 - top / fig_h, **spacing,
-        )
-        return fig, (axes[:, 0] if vertical else axes[0])
-
-
-    def despine_axis(ax, despine):
-        if despine:
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
-
-    return binned_density, despine_axis, finite, metric_limits, panel_grid
-
-
-@app.cell
 def _(mo):
     mo.md("""
     ## Figure builders
 
     A **split spec** — `{col, left, right}` with each side carrying its `value` in
-    that column plus its label and colours — defines a comparison once and is then
+    that column plus its label and colors — defines a comparison once and is then
     shared by that level's violin, Q-Q and statistics sections, so the three cannot
     drift apart. Both builders draw only; every statistic lives in a statistics
     section.
     """)
     return
-
-
-@app.cell
-def _(
-    Patch,
-    binned_density,
-    despine_axis,
-    finite,
-    metric_limits,
-    np,
-    panel_grid,
-):
-    def make_violin_figure(df, metrics, cohorts, cohort_labels, split, metric_labels,
-                           n_bins, clamp, center_mode, show_iqr, despine, vertical,
-                           font_size, legend_loc="upper left"):
-        """One panel per metric; within a panel the x-axis is the cohorts and each
-        cohort is a split violin, left half = the split's left side.
-
-        Each half is normalized to its own area (the groups differ hugely in size),
-        then both are scaled by a single per-cohort factor so the taller peak just
-        fills the half-slot — relative peak height between the halves is kept.
-        """
-        metrics = list(metrics)
-        fs = font_size
-        halfwidth = 0.4
-        fig, axes = panel_grid(
-            max(len(metrics), 1), panel_w=1.7 * len(cohorts), panel_h=2.5,
-            # left = y-label + tick digits, bottom = x tick labels; both scale mildly
-            # with the font so they hug the labels but don't clip when it is bumped.
-            gutters=(0.55 + fs * 0.02, 0.2, 0.3, 0.30 + fs * 0.02, 1.2),
-            vertical=vertical,
-        )
-
-        def draw_marks(ax, values, x_center, sign, color, density, edges, scale):
-            # Short horizontal marks on one half: solid = median, diamond = mean,
-            # dotted = Q1/Q3, coloured by group. Each spans only the violin's width
-            # at its own y (the scaled density of the bin it lands in), so it never
-            # overshoots the silhouette. Marks use unclamped values, so one can sit
-            # just outside the y-limits.
-            values = finite(values)
-            if values.size == 0:
-                return
-
-            def edge_at(y):
-                b = np.searchsorted(edges, y, side="right") - 1
-                return x_center + sign * density[int(np.clip(b, 0, len(density) - 1))] * scale
-
-            if center_mode in ("median", "both"):
-                m = np.median(values)
-                ax.plot([x_center, edge_at(m)], [m, m], color=color, lw=2,
-                        solid_capstyle="butt", zorder=4)
-            if center_mode in ("mean", "both"):
-                mu = values.mean()
-                # diamond at the midpoint of the violin's width at the mean's height
-                ax.plot([(x_center + edge_at(mu)) / 2], [mu], marker="D", ms=6,
-                        mfc="white", mec=color, mew=1.5, zorder=5)
-            if show_iqr:
-                for q in np.percentile(values, [25, 75]):
-                    ax.plot([x_center, edge_at(q)], [q, q], color=color, lw=2.0,
-                            ls=":", zorder=4)
-
-        for ax, metric in zip(axes, metrics):
-            lo, hi = metric_limits(df[metric], clamp)
-            # Shared bin edges across cohorts within a metric → the violins are
-            # directly comparable along this panel's y-axis.
-            edges = np.linspace(lo, hi, int(n_bins) + 1)
-            centers = (edges[:-1] + edges[1:]) / 2
-
-            for i, cohort in enumerate(cohorts):
-                sub = df[df["cohort"] == cohort]
-                halves = []
-                for side, sign in (("left", -1), ("right", +1)):
-                    spec = split[side]
-                    values = sub.loc[sub[split["col"]] == spec["value"], metric]
-                    halves.append((spec, sign, values, binned_density(values, edges)))
-                peak = max(density.max() for *_, density in halves)
-                if peak <= 0:
-                    continue
-                scale = halfwidth / peak
-                for spec, sign, values, density in halves:
-                    ax.fill_betweenx(
-                        centers, i, i + sign * density * scale, step="mid",
-                        color=spec["fill"], alpha=0.5, edgecolor=spec["edge"],
-                        linewidth=0.8,
-                    )
-                    draw_marks(ax, values, i, sign, spec["mark"], density, edges, scale)
-
-            ax.set_xticks(range(len(cohorts)))
-            ax.set_xticklabels(cohort_labels, fontsize=fs, ha="center")
-            ax.set_xlim(-0.6, len(cohorts) - 0.4)
-            ax.set_ylim(lo, hi)
-            ax.set_ylabel(metric_labels.get(metric, metric), fontsize=fs)
-            ax.tick_params(axis="y", labelsize=fs)
-            despine_axis(ax, despine)
-
-        axes[0].legend(
-            handles=[
-                Patch(facecolor=split[side]["fill"], alpha=0.5,
-                      edgecolor=split[side]["edge"], label=split[side]["label"])
-                for side in ("left", "right")
-            ],
-            fontsize=fs - 2, loc=legend_loc, ncol=2, columnspacing=1.0, framealpha=0.9,
-        )
-        return fig
-
-    return (make_violin_figure,)
 
 
 @app.cell
@@ -745,7 +513,7 @@ def _(mo):
 
 @app.cell
 def _(mo, waters):
-    _candidates = ["b_factor_zscore", "edia", "b_factor", "occupancy", "muse_score"]
+    _candidates = ["b_factor_zscore", "edia", "b_factor", "occupancy"]
     _available = [
         c for c in _candidates if c in waters.columns and waters[c].notna().any()
     ]
@@ -756,18 +524,6 @@ def _(mo, waters):
     )
     water_metrics
     return (water_metrics,)
-
-
-@app.cell
-def _():
-    WATER_SPLIT = dict(
-        col="group",
-        left=dict(value="consensus", label="consensus",
-                  fill="r", edge="r", mark="darkred"),
-        right=dict(value="nonconsensus", label="non-consensus",
-                   fill="grey", edge="dimgrey", mark="black"),
-    )
-    return (WATER_SPLIT,)
 
 
 @app.cell
@@ -1019,38 +775,30 @@ def _(
     np,
     structure_cutoffs,
     structure_split_metric,
+    structure_split_spec,
     structures,
 ):
-    # Labelled once here and shared by all three per-structure sections. Structures
+    # Labeled once here and shared by all three per-structure sections. Structures
     # whose split metric is missing are dropped from both groups.
     split_metric = structure_split_metric.value
     split_cutoffs = structure_cutoffs.value
     _base = structures.dropna(subset=[split_metric])
-    structures_labelled = _base.assign(
+    structures_labeled = _base.assign(
         group=np.where(
             _base[split_metric] >= _base["cohort"].map(split_cutoffs), "good", "poor",
         )
     )
-    # Blue accent instead of the per-water figure's red, so the two levels are never
-    # confused; red stays reserved for consensus waters.
-    STRUCTURE_SPLIT = dict(
-        col="group",
-        left=dict(value="good",
-                  label=f"≥ {METRIC_LABELS.get(split_metric, split_metric)} cutoff",
-                  fill="mediumblue", edge="mediumblue", mark="darkblue"),
-        right=dict(value="poor", label="below cutoff",
-                   fill="saddlebrown", edge="dimgrey", mark="saddlebrown"),
-    )
+    STRUCTURE_SPLIT = structure_split_spec(split_metric, METRIC_LABELS)
 
     print(f"split on {split_metric} at each cohort's own cutoff:")
     for _cohort in COHORTS:
-        _rows = structures_labelled[structures_labelled["cohort"] == _cohort]
+        _rows = structures_labeled[structures_labeled["cohort"] == _cohort]
         print(
             f"  {_cohort}: cutoff {split_cutoffs.get(_cohort):.4g} → "
             f"{int((_rows['group'] == 'good').sum())} good (≥), "
             f"{int((_rows['group'] == 'poor').sum())} poor (<)"
         )
-    return STRUCTURE_SPLIT, split_cutoffs, split_metric, structures_labelled
+    return STRUCTURE_SPLIT, split_cutoffs, split_metric, structures_labeled
 
 
 @app.cell
@@ -1082,10 +830,10 @@ def _(
     save_figure,
     structure_dist_metrics,
     structure_violin_save,
-    structures_labelled,
+    structures_labeled,
 ):
     _fig = make_violin_figure(
-        structures_labelled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
+        structures_labeled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
         STRUCTURE_SPLIT, METRIC_LABELS, legend_loc="upper left", **VIOLIN_STYLE,
     )
     save_figure(_fig, structure_violin_save)
@@ -1132,10 +880,10 @@ def _(
     save_figure,
     structure_dist_metrics,
     structure_qq_save,
-    structures_labelled,
+    structures_labeled,
 ):
     _fig, structure_qq_fits = make_qq_figure(
-        structures_labelled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
+        structures_labeled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
         STRUCTURE_SPLIT, METRIC_LABELS, legend_loc="upper left", **QQ_STYLE,
     )
     save_figure(_fig, structure_qq_save)
@@ -1210,14 +958,14 @@ def _(
     structure_stats_run,
     structure_stats_test,
     structure_table_save,
-    structures_labelled,
+    structures_labeled,
 ):
     mo.stop(
         not structure_stats_run.value,
         mo.md("*Tick **compute per-structure statistics** above to run the bootstrap.*"),
     )
     structure_comparison_table = comparison_table(
-        structures_labelled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
+        structures_labeled, list(structure_dist_metrics.value), COHORTS, COHORT_LABELS,
         STRUCTURE_SPLIT, METRIC_LABELS,
         test=structure_stats_test.value, n_boot=int(structure_stats_n_boot.value),
         continuous_split_col=split_metric,

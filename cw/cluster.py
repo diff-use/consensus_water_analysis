@@ -1,5 +1,3 @@
-# Cluster-stability Jaccard logic (_mean_best_jaccard) derived from Vratin's
-# porting_reference/cluster.py::compute_cluster_stability.
 from __future__ import annotations
 
 import warnings
@@ -7,7 +5,7 @@ import warnings
 import hdbscan as hdbscan_lib
 import numpy as np
 import pandas as pd
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDTree  # ty: ignore[unresolved-import] (compiled re-export)
 
 from cw.metrics import consensus_water_mask
 
@@ -23,7 +21,7 @@ def run_hdbscan(
 ) -> np.ndarray:
     """Cluster (x, y, z) coordinates with HDBSCAN. Returns integer labels (-1 = noise).
 
-    min_samples defaults to min_cluster_size (HDBSCAN default behaviour) when None.
+    min_samples defaults to min_cluster_size (HDBSCAN default behavior) when None.
     """
     clusterer = hdbscan_lib.HDBSCAN(
         min_cluster_size=min_cluster_size,

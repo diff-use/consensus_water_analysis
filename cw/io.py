@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-import io
 import json
 from pathlib import Path
 
 import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
-import gemmi
 import numpy as np
 import pandas as pd
 from loguru import logger
 
-# Altloc values PSEUDO treats as "no altloc" when generating MUSE scores.
-# "." is biotite's altloc_id for a water with no alternate conformers.
-MUSE_VALID_ALTLOCS: frozenset[str] = frozenset({"\x00", " ", "A", "", "."})
+from cw.metrics import (
+    consensus_centers,
+    consensus_water_mask,
+    per_structure_consensus_pr,
+)
 
 # ── utilities ─────────────────────────────────────────────────────────────────
 
@@ -78,25 +78,49 @@ def find_cohort_metadata(data_dir: Path | str, cohort: str) -> Path | None:
         probe = probe.rsplit("_", 1)[0]
 
 
-def parse_identity(identity: str) -> tuple[str, str, str]:
-    """Split '<mtz_source>_refined_by_<starting_model>_<variant>' into its three parts."""
-    mtz_source, rest = identity.split("_refined_by_", 1)
-    starting_model, variant = rest.rsplit("_", 1)
-    return mtz_source, starting_model, variant
+def load_cohort_frames(data_dir, cohort, cutoff, match_radius, suffix=""):
+    """(per-water frame, per-structure frame, one-line summary) for one cohort.
 
-
-def read_phenix_cif(path: Path) -> pdbx.CIFFile:
-    """Read a phenix refinement CIF into a clean single-block biotite CIFFile.
-
-    Phenix output CIFs embed an `_atom_type` loop with multi-line (`;`-delimited)
-    text values that biotite 1.4's reader cannot parse — it silently drops
-    `atom_site` — and append monomer-restraint data blocks. gemmi parses them
-    fine, so round-tripping through gemmi's mmCIF writer yields a clean
-    single-block document biotite can read. Water altlocs and occupancies are
-    preserved through the round-trip.
+    Both frames carry a `cohort` column and a `group` column holding the split
+    label, resolved here because each cohort has its own cluster ids, occupancies
+    and consensus centers. A water is consensus iff it is a within-cutoff member of
+    a cluster whose occupancy clears `cutoff`. `suffix` selects a member-radius
+    variant of the CSVs (e.g. "_0.5"); "" reads the default pair.
     """
-    st = gemmi.read_structure(str(path))
-    return pdbx.CIFFile.read(io.StringIO(st.make_mmcif_document().as_string()))
+    directory = Path(data_dir) / cohort
+    clusters = pd.read_csv(directory / f"clusters{suffix}.csv")
+    members = pd.read_csv(directory / f"cluster_members{suffix}.csv")
+
+    is_consensus = consensus_water_mask(members, clusters, cutoff)
+    waters = members.assign(
+        group=np.where(is_consensus, "consensus", "nonconsensus"),
+        cohort=cohort,
+    )
+
+    # Per-structure precision/recall/f1/num_water against the consensus centers,
+    # joined to deposited metadata. The merge renames metadata's own num_water to
+    # num_water_deposited so the clustered count stays the plain num_water;
+    # metadata scalars can carry "<missing>" strings, so coerce to numeric.
+    centers = consensus_centers(clusters, cutoff)
+    pr = per_structure_consensus_pr(members, centers, match_radius)
+    meta_path = find_cohort_metadata(data_dir, cohort)
+    if meta_path is None:
+        structures, note = pr, "no metadata.csv found"
+    else:
+        meta = pd.read_csv(meta_path)
+        scalars = [c for c in meta.columns if c != "pdb_id"]
+        meta[scalars] = meta[scalars].apply(pd.to_numeric, errors="coerce")
+        structures = pr.merge(meta, on="pdb_id", how="left", suffixes=("", "_deposited"))
+        matched = int(pr["pdb_id"].isin(meta["pdb_id"]).sum())
+        note = f"metadata {meta_path.parent.name}/ ({matched}/{len(pr)} matched)"
+
+    n_consensus = int((waters["group"] == "consensus").sum())
+    summary = (
+        f"{cohort}: {len(members)} waters, {n_consensus} consensus / "
+        f"{len(members) - n_consensus} non-consensus, {len(clusters)} clusters, "
+        f"{len(pr)} structures, {note}"
+    )
+    return waters, structures.assign(cohort=cohort), summary
 
 
 def water_oxygen_mask(atoms: struc.AtomArray) -> np.ndarray:
@@ -126,9 +150,6 @@ def load_edia(json_path: Path) -> dict[tuple[str, int, str], float] | None:
 
     Keyed on (chain_id, res_id, ins_code) → EDIAm float.
     Returns None if the file is missing or unreadable.
-
-    Ported from Vratin's cluster.py::load_edia (uses the stricter
-    (chain, seqNum, insCode) triple rather than seqNum-only keying).
     """
     if not json_path.exists():
         return None
@@ -213,7 +234,6 @@ def load_protein(
 ) -> tuple[struc.AtomArray, int]:
     """Load protein-only atoms (highest-occupancy altloc) and return (array, res_id_offset).
 
-    Ported from align_pdbs.py::get_protein_clean_array, adapted for CIF.
     The offset renumbers the first residue to 1 so BLOSUM62 alignment is
     robust across structures with different deposited numbering schemes.
 
@@ -254,49 +274,20 @@ def _attach_edia(
     return df
 
 
-def _attach_muse(df: pd.DataFrame, muse_csv: Path) -> pd.DataFrame:
-    """Merge MUSE scores into df from a per-structure CSV.
-
-    MUSE scores are atom-level but keyed without altloc. The join is on
-    (chain_id, res_id, ins_code), which fans the score to all altloc variants
-    of a residue; muse_score is then nulled for altlocs outside MUSE_VALID_ALTLOCS.
-
-    df must still contain ins_code. Adds a 'muse_score' column.
-    """
-    if not muse_csv.exists():
-        df["muse_score"] = float("nan")
-        return df
-
-    muse = pd.read_csv(muse_csv)
-    muse = muse[muse["is_water"] == True].copy()  # noqa: E712
-    muse["ins_code"] = muse["insertion_code"].apply(normalize_ins_code)
-    muse = muse.rename(columns={"residue_seq_id": "res_id"})[
-        ["chain_id", "res_id", "ins_code", "score"]
-    ]
-
-    df = df.merge(muse, on=["chain_id", "res_id", "ins_code"], how="left")
-    df = df.rename(columns={"score": "muse_score"})
-
-    df.loc[~df["altloc"].isin(MUSE_VALID_ALTLOCS), "muse_score"] = float("nan")
-
-    return df
-
-
 def load_structure_waters(
     cif_path: Path | pdbx.CIFFile,
     json_path: Path | None = None,
-    muse_csv: Path | None = None,
     pdb_id: str | None = None,
 ) -> pd.DataFrame:
-    """Load water O records from one CIF, optionally attaching EDIA and MUSE scores.
+    """Load water O records from one CIF, optionally attaching EDIA scores.
 
-    Reads the CIF once with altloc='all'. EDIA and MUSE are joined while ins_code
-    is still present, then ins_code is dropped before returning.
+    Reads the CIF once with altloc='all'. EDIA is joined while ins_code is still
+    present, then ins_code is dropped before returning.
 
-    cif_path may be a Path or an already-loaded CIFFile (e.g. a phenix CIF
-    pre-cleaned via read_phenix_cif); pass pdb_id explicitly in the latter case.
+    cif_path may be a Path or an already-loaded CIFFile; pass pdb_id explicitly
+    in the latter case.
 
-    Columns: pdb_id, chain_id, res_id, altloc, x, y, z, b_factor, occupancy, edia[, muse_score]
+    Columns: pdb_id, chain_id, res_id, altloc, x, y, z, b_factor, occupancy, edia
     """
     if isinstance(cif_path, Path):
         pdb_id = pdb_id if pdb_id is not None else cif_path.stem.removesuffix("_final")
@@ -327,9 +318,6 @@ def load_structure_waters(
     else:
         df["edia"] = float("nan")
 
-    if muse_csv is not None:
-        df = _attach_muse(df, muse_csv)
-
     return df.drop(columns=["ins_code"])
 
 
@@ -339,40 +327,36 @@ def resolve_aligned_water_inputs(
     *,
     edia_dir: Path | str,
     edia_template: str,
-    muse_dir: Path | str,
-    muse_template: str,
-    cohort_id: str,
-) -> list[tuple[Path, Path | None, Path | None]]:
-    """Resolve (aligned_cif, edia_json, muse_csv) triples for members with an aligned CIF.
+) -> list[tuple[Path, Path | None]]:
+    """Resolve (aligned_cif, edia_json) pairs for members with an aligned CIF.
 
     Members without an aligned CIF in aligned_dir are skipped, so the returned list length is
-    the count of members actually found. The edia / muse entry of a triple is None when that
-    score file is absent for the member. The result feeds straight into collect_aligned_waters.
+    the count of members actually found. The edia entry of a pair is None when that score
+    file is absent for the member. The result feeds straight into collect_aligned_waters.
     """
-    pairs: list[tuple[Path, Path | None, Path | None]] = []
+    pairs: list[tuple[Path, Path | None]] = []
     for member_id in member_ids:
         cif = Path(aligned_dir) / f"{member_id}.cif"
         if not cif.exists():
             continue
         edia = Path(edia_dir) / edia_template.format(pdb_id=member_id)
-        muse = Path(muse_dir) / muse_template.format(cohort=cohort_id, pdb_id=member_id)
-        pairs.append((cif, edia if edia.exists() else None, muse if muse.exists() else None))
+        pairs.append((cif, edia if edia.exists() else None))
     return pairs
 
 
 def collect_aligned_waters(
-    cif_json_pairs: list[tuple[Path, Path | None, Path | None]],
+    cif_json_pairs: list[tuple[Path, Path | None]],
     *,
     out_path: Path | None = None,
 ) -> pd.DataFrame:
     """Concatenate water records from aligned CIFs into one DataFrame.
 
-    Each element of cif_json_pairs is (aligned_cif, edia_json_path, muse_csv),
-    where edia_json_path / muse_csv may be None if that score is unavailable
-    for the structure. If out_path is given the result is also written to CSV
-    before returning.
+    Each element of cif_json_pairs is (aligned_cif, edia_json_path), where
+    edia_json_path may be None if the EDIA score is unavailable for the
+    structure. If out_path is given the result is also written to CSV before
+    returning.
     """
-    frames = [load_structure_waters(cif, json, muse) for cif, json, muse in cif_json_pairs]
+    frames = [load_structure_waters(cif, json) for cif, json in cif_json_pairs]
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)

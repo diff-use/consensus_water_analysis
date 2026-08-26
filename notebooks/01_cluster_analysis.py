@@ -76,7 +76,7 @@ def _(mo):
     # default `value=""`, not what you type here).
     cohort_input = mo.ui.text(
         value="hewls_65",
-        placeholder="e.g. hewls_65 or carbonicanhydrase_000562 or endothiapepsin_000240",
+        placeholder="e.g. hewls_65 or carbonicanhydrase_000562_iso or endothiapepsin_000240_iso",
         label="cohort",
         full_width=True,
     )
@@ -95,28 +95,26 @@ def _(Path, cohort_input, config, find_cohort_metadata, mo, pd):
     mo.stop(
         not COHORT,
         mo.md("**Enter a cohort in the box above to load its data** — "
-              "e.g. `hewls_65` or `carbonicanhydrase_000562`."),
+              "e.g. `hewls_65` or `carbonicanhydrase_000562_iso`."),
     )
     # Member-radius variant of the clustering CSVs to read. Set to e.g. "0.5" or
     # "1.0" to load the radius-sweep outputs (clusters_<r>.csv /
     # cluster_members_<r>.csv written by find_clustering_hyperparameters.py
     # --radius); None reads the default clusters.csv / cluster_members.csv.
     MEMBER_RADIUS = None
-    DATA = Path(config.DATA_DIR) / COHORT
-    subset_suffix = "_iso" #"_bfactor_z2.0water" #"_iso"
-    SUBSET = Path(config.DATA_DIR) / (COHORT + subset_suffix) #/ "min_cluster_size_5_min_samples_5"
-    if not SUBSET.exists():
-        SUBSET = DATA
-    else: 
-        COHORT += subset_suffix
+    # The box above names the directory to read verbatim — water-level subsets
+    # (`<cohort>_iso`, `<cohort>_bfactor_z2.0water`) are typed out in full rather
+    # than derived here, so the notebook never loads a cohort you did not ask for.
+    COHORT_DIR = Path(config.DATA_DIR) / COHORT
 
     _suffix = f"_{MEMBER_RADIUS}" if MEMBER_RADIUS is not None else ""
-    clusters = pd.read_csv(SUBSET / f"clusters{_suffix}.csv")
-    cluster_members = pd.read_csv(SUBSET / f"cluster_members{_suffix}.csv")
+    clusters = pd.read_csv(COHORT_DIR / f"clusters{_suffix}.csv")
+    cluster_members = pd.read_csv(COHORT_DIR / f"cluster_members{_suffix}.csv")
 
     # Per-structure deposited metadata (resolution, R-free, ...). Water-level
-    # subsets share the parent cohort's metadata.csv, so fall back to DATA.
-    _meta_path = find_cohort_metadata(config.DATA_DIR, SUBSET.name)
+    # subsets do not re-deposit it, so find_cohort_metadata walks up the trailing
+    # `_<token>` segments to the parent cohort that has it.
+    _meta_path = find_cohort_metadata(config.DATA_DIR, COHORT)
     metadata = pd.read_csv(_meta_path) if _meta_path is not None else None
 
     # Occupancy above which a cluster counts as consensus — used by the occupancy
@@ -131,7 +129,7 @@ def _(Path, cohort_input, config, find_cohort_metadata, mo, pd):
     print(f"clusters rows:        {len(clusters)}")
     print(f"cluster_members rows: {len(cluster_members)}")
     print(f"match radius:         {match_radius}")
-    print(f"SUBSET: {SUBSET}")
+    print(f"cohort directory:     {COHORT_DIR}")
     return (
         PLOTS_DIR,
         cluster_members,
@@ -359,7 +357,7 @@ def _(mo):
 
 @app.cell
 def _(cluster_members, mo):
-    _candidates = ["b_factor", "edia", "muse_score", "occupancy", "b_factor_zscore"]
+    _candidates = ["b_factor", "edia", "occupancy", "b_factor_zscore"]
     _available = [
         c for c in _candidates
         if c in cluster_members.columns and cluster_members[c].notna().any()

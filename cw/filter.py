@@ -22,8 +22,6 @@ def best_sym_positions(
     is nearest, then apply the inverse transform to place the water in the canonical
     protein ASU.  This matches the phenix.sort_hetatms convention.
 
-    Ported from porting_reference/filter_waters_by_distance.py::best_sym_positions.
-
     Parameters
     ----------
     water_pos_orth   : (N, 3) orthogonal coordinates in Å
@@ -118,6 +116,20 @@ def keep_by_edia(
     return scores > cutoff if exclusive_borderline else scores >= cutoff
 
 
+def bfactor_reference(
+    atoms: struc.AtomArray, water_O_mask: np.ndarray, population: str
+) -> np.ndarray:
+    """B-factors of the z-score reference population: "water" (water O atoms),
+    "protein" (protein heavy atoms) or "all" (every atom)."""
+    if population == "water":
+        return atoms.b_factor[water_O_mask]
+    if population == "protein":
+        return atoms.b_factor[protein_heavy_mask(atoms)]
+    if population == "all":
+        return atoms.b_factor
+    raise ValueError(f"bfactor population must be 'water', 'protein', or 'all', got {population!r}")
+
+
 def keep_by_bfactor(
     atoms: struc.AtomArray,
     water_O_mask: np.ndarray,
@@ -131,7 +143,7 @@ def keep_by_bfactor(
     `exclusive_borderline` is set — dropping waters sitting exactly on the cutoff.
 
     mode="zscore" (default): keep waters whose B-factor z-score <= cutoff, where the
-    z-score standardises each water's B-factor against a reference `population` of
+    z-score standardizes each water's B-factor against a reference `population` of
     B-factors — "water" (water O atoms, default), "protein" (protein heavy atoms), or
     "all" (every atom). High B-factors (poorly ordered waters) land above the cutoff
     and are dropped. A degenerate reference (std == 0) keeps every water.
@@ -146,16 +158,7 @@ def keep_by_bfactor(
     if mode != "zscore":
         raise ValueError(f"bfactor mode must be 'zscore' or 'absolute', got {mode!r}")
 
-    if population == "water":
-        ref = water_b
-    elif population == "protein":
-        ref = atoms.b_factor[protein_heavy_mask(atoms)]
-    elif population == "all":
-        ref = atoms.b_factor
-    else:
-        raise ValueError(
-            f"bfactor population must be 'water', 'protein', or 'all', got {population!r}"
-        )
+    ref = bfactor_reference(atoms, water_O_mask, population)
 
     std = ref.std()
     if std == 0:
