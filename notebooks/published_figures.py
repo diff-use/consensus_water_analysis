@@ -133,7 +133,7 @@ def _(mo):
     ## Precision/recall Pareto front
 
     One panel per cohort, shown inline: every structure's waters scored against that
-    cohort's consensus centers, coloured by how many waters the structure contributes.
+    cohort's consensus centers, colored by how many waters the structure contributes.
     The red line is the non-dominated upper-right envelope and the star is the max-F1
     knee.
     """)
@@ -237,13 +237,13 @@ def _(
     # median fall on the other side of the rounded value, so dropping the round()
     # here would move a few structures between the groups.
     _cutoffs = _base.groupby("cohort")[SPLIT_METRIC].median().round(4)
-    _labelled = _base.assign(
+    _labeled = _base.assign(
         group=np.where(
             _base[SPLIT_METRIC] >= _base["cohort"].map(_cutoffs), "good", "poor",
         )
     )
     for _cohort in COHORTS:
-        _rows = _labelled[_labelled["cohort"] == _cohort]
+        _rows = _labeled[_labeled["cohort"] == _cohort]
         print(
             f"{_cohort}: {SPLIT_METRIC} cutoff {_cutoffs.get(_cohort):.4g} → "
             f"{int((_rows['group'] == 'good').sum())} good, "
@@ -251,7 +251,7 @@ def _(
         )
 
     make_violin_figure(
-        _labelled, STRUCTURE_METRICS, COHORTS, COHORT_LABELS,
+        _labeled, STRUCTURE_METRICS, COHORTS, COHORT_LABELS,
         structure_split_spec(SPLIT_METRIC, METRIC_LABELS), METRIC_LABELS,
         legend_loc="upper left", **VIOLIN_STYLE,
     )

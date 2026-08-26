@@ -122,8 +122,9 @@ def main() -> None:
         sys.exit(1)
 
     # Denominator for cluster_occupancy — count found aligned CIFs, matching cluster_waters.py
-    # (not waters["pdb_id"].nunique()) so the two scripts produce identical clusters.csv. this
-    # would count structures without waters.
+    # rather than waters["pdb_id"].nunique(), which would silently drop a structure that
+    # contributes no waters. Keeping the two in step makes both scripts write the same
+    # clusters.csv.
     n_total_structures = n_found
 
     logger.info("Grid-searching HDBSCAN params (one fit per candidate)...")
@@ -178,7 +179,7 @@ def _print_summary(waters, n_total_structures: int, result: dict) -> None:
         f"({len(well_formed)} well-formed candidates)\n"
     )
     print(
-        f"Conserved sites (consensus>0.3): {int(n_occ.min())}-{int(n_occ.max())} across candidates; "
+        f"Conserved sites (consensus>=0.3): {int(n_occ.min())}-{int(n_occ.max())} across candidates; "
         f"{frac.min():.0%}-{frac.max():.0%} of all pooled waters lie in them"
     )
     print(
@@ -193,7 +194,7 @@ def _print_summary(waters, n_total_structures: int, result: dict) -> None:
         f"\nRECOMMEND (min-max-rank): min_cluster_size={result['min_cluster_size']}, "
         f"min_samples={result['min_samples']}   "
         f"(DBCV rank #{result['dbcv_rank']}, stability rank #{result['stab_rank']}; "
-        f"n_clusters={result['n_clusters']}, consensus>0.3={result['n_occ_ge_0_3']})"
+        f"n_clusters={result['n_clusters']}, consensus>=0.3={result['n_occ_ge_0_3']})"
     )
     if result["guard_relaxed"]:
         note = "WARNING: no params kept clusters within the membership radius; guard relaxed."

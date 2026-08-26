@@ -175,9 +175,6 @@ def load_edia(json_path: Path) -> dict[tuple[str, int, str], float] | None:
 
     Keyed on (chain_id, res_id, ins_code) → EDIAm float.
     Returns None if the file is missing or unreadable.
-
-    Ported from Vratin's cluster.py::load_edia (uses the stricter
-    (chain, seqNum, insCode) triple rather than seqNum-only keying).
     """
     if not json_path.exists():
         return None
@@ -262,7 +259,6 @@ def load_protein(
 ) -> tuple[struc.AtomArray, int]:
     """Load protein-only atoms (highest-occupancy altloc) and return (array, res_id_offset).
 
-    Ported from align_pdbs.py::get_protein_clean_array, adapted for CIF.
     The offset renumbers the first residue to 1 so BLOSUM62 alignment is
     robust across structures with different deposited numbering schemes.
 

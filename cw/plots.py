@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
+
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib.patches import Patch
-
 
 METRIC_LABELS = {
     "edia": "EDIA",
@@ -27,29 +28,38 @@ METRIC_LABELS = {
 }
 
 # A split spec — {col, left, right} with each side carrying its `value` in that
-# column plus its label and colours — defines a comparison once so the violin, Q-Q
+# column plus its label and colors — defines a comparison once so the violin, Q-Q
 # and statistics views of it cannot drift apart.
 WATER_SPLIT = dict(
     col="group",
-    left=dict(value="consensus", label="consensus",
-              fill="r", edge="r", mark="darkred"),
-    right=dict(value="nonconsensus", label="non-consensus",
-               fill="grey", edge="dimgrey", mark="black"),
+    left=dict(value="consensus", label="consensus", fill="r", edge="r", mark="darkred"),
+    right=dict(
+        value="nonconsensus", label="non-consensus", fill="grey", edge="dimgrey", mark="black"
+    ),
 )
 
 
 def structure_split_spec(split_metric, metric_labels=None):
-    """Split spec for the per-structure good/poor comparison, labelled by the
+    """Split spec for the per-structure good/poor comparison, labeled by the
     metric the split was cut on. Blue accent instead of the per-water figure's red,
     so the two levels are never confused; red stays reserved for consensus waters."""
     labels = METRIC_LABELS if metric_labels is None else metric_labels
     return dict(
         col="group",
-        left=dict(value="good",
-                  label=f"≥ {labels.get(split_metric, split_metric)} cutoff",
-                  fill="mediumblue", edge="mediumblue", mark="darkblue"),
-        right=dict(value="poor", label="below cutoff",
-                   fill="saddlebrown", edge="dimgrey", mark="saddlebrown"),
+        left=dict(
+            value="good",
+            label=f"≥ {labels.get(split_metric, split_metric)} cutoff",
+            fill="mediumblue",
+            edge="mediumblue",
+            mark="darkblue",
+        ),
+        right=dict(
+            value="poor",
+            label="below cutoff",
+            fill="saddlebrown",
+            edge="dimgrey",
+            mark="saddlebrown",
+        ),
     )
 
 
@@ -209,7 +219,7 @@ def plot_pr_scatter(
         )
 
     if sc is not None and color_values is not None:
-        cbar_opts = {"pad": 0.02, **(cbar_kwargs or {})}
+        cbar_opts: dict[str, Any] = {"pad": 0.02, **(cbar_kwargs or {})}
         cbar = (
             fig.colorbar(
                 sc,
@@ -632,7 +642,8 @@ def metric_limits(values, clamp):
         return 0.0, 1.0
     lo, hi = (
         (float(np.quantile(values, 0.0)), float(np.quantile(values, 0.999)))
-        if clamp else (float(values.min()), float(values.max()))
+        if clamp
+        else (float(values.min()), float(values.max()))
     )
     return lo, hi if hi > lo else lo + 1.0
 
@@ -651,11 +662,16 @@ def panel_grid(n, panel_w, panel_h, gutters, vertical):
         fig_h = bottom + panel_h + top
         spacing = {"wspace": gap / panel_w}
     fig, axes = plt.subplots(
-        *((n, 1) if vertical else (1, n)), figsize=(fig_w, fig_h), squeeze=False,
+        *((n, 1) if vertical else (1, n)),
+        figsize=(fig_w, fig_h),
+        squeeze=False,
     )
     fig.subplots_adjust(
-        left=left / fig_w, right=1 - right / fig_w,
-        bottom=bottom / fig_h, top=1 - top / fig_h, **spacing,
+        left=left / fig_w,
+        right=1 - right / fig_w,
+        bottom=bottom / fig_h,
+        top=1 - top / fig_h,
+        **spacing,
     )
     return fig, (axes[:, 0] if vertical else axes[0])
 
@@ -666,9 +682,22 @@ def despine_axis(ax, despine):
         ax.spines["right"].set_visible(False)
 
 
-def make_violin_figure(df, metrics, cohorts, cohort_labels, split, metric_labels,
-                       n_bins, clamp, center_mode, show_iqr, despine, vertical,
-                       font_size, legend_loc="upper left"):
+def make_violin_figure(
+    df,
+    metrics,
+    cohorts,
+    cohort_labels,
+    split,
+    metric_labels,
+    n_bins,
+    clamp,
+    center_mode,
+    show_iqr,
+    despine,
+    vertical,
+    font_size,
+    legend_loc="upper left",
+):
     """One panel per metric; within a panel the x-axis is the cohorts and each
     cohort is a split violin, left half = the split's left side.
 
@@ -680,7 +709,9 @@ def make_violin_figure(df, metrics, cohorts, cohort_labels, split, metric_labels
     fs = font_size
     halfwidth = 0.4
     fig, axes = panel_grid(
-        max(len(metrics), 1), panel_w=1.7 * len(cohorts), panel_h=2.5,
+        max(len(metrics), 1),
+        panel_w=1.7 * len(cohorts),
+        panel_h=2.5,
         # left = y-label + tick digits, bottom = x tick labels; both scale mildly
         # with the font so they hug the labels but don't clip when it is bumped.
         gutters=(0.55 + fs * 0.02, 0.2, 0.3, 0.30 + fs * 0.02, 1.2),
@@ -689,7 +720,7 @@ def make_violin_figure(df, metrics, cohorts, cohort_labels, split, metric_labels
 
     def draw_marks(ax, values, x_center, sign, color, density, edges, scale):
         # Short horizontal marks on one half: solid = median, diamond = mean,
-        # dotted = Q1/Q3, coloured by group. Each spans only the violin's width
+        # dotted = Q1/Q3, colored by group. Each spans only the violin's width
         # at its own y (the scaled density of the bin it lands in), so it never
         # overshoots the silhouette. Marks use unclamped values, so one can sit
         # just outside the y-limits.
@@ -703,17 +734,25 @@ def make_violin_figure(df, metrics, cohorts, cohort_labels, split, metric_labels
 
         if center_mode in ("median", "both"):
             m = np.median(values)
-            ax.plot([x_center, edge_at(m)], [m, m], color=color, lw=2,
-                    solid_capstyle="butt", zorder=4)
+            ax.plot(
+                [x_center, edge_at(m)], [m, m], color=color, lw=2, solid_capstyle="butt", zorder=4
+            )
         if center_mode in ("mean", "both"):
             mu = values.mean()
             # diamond at the midpoint of the violin's width at the mean's height
-            ax.plot([(x_center + edge_at(mu)) / 2], [mu], marker="D", ms=6,
-                    mfc="white", mec=color, mew=1.5, zorder=5)
+            ax.plot(
+                [(x_center + edge_at(mu)) / 2],
+                [mu],
+                marker="D",
+                ms=6,
+                mfc="white",
+                mec=color,
+                mew=1.5,
+                zorder=5,
+            )
         if show_iqr:
             for q in np.percentile(values, [25, 75]):
-                ax.plot([x_center, edge_at(q)], [q, q], color=color, lw=2.0,
-                        ls=":", zorder=4)
+                ax.plot([x_center, edge_at(q)], [q, q], color=color, lw=2.0, ls=":", zorder=4)
 
     # strict=False: panel_grid allocates max(len(metrics), 1) axes, so an empty
     # metrics list leaves one unused axis.
@@ -737,8 +776,13 @@ def make_violin_figure(df, metrics, cohorts, cohort_labels, split, metric_labels
             scale = halfwidth / peak
             for spec, sign, values, density in halves:
                 ax.fill_betweenx(
-                    centers, i, i + sign * density * scale, step="mid",
-                    color=spec["fill"], alpha=0.5, edgecolor=spec["edge"],
+                    centers,
+                    i,
+                    i + sign * density * scale,
+                    step="mid",
+                    color=spec["fill"],
+                    alpha=0.5,
+                    edgecolor=spec["edge"],
                     linewidth=0.8,
                 )
                 draw_marks(ax, values, i, sign, spec["mark"], density, edges, scale)
@@ -753,10 +797,18 @@ def make_violin_figure(df, metrics, cohorts, cohort_labels, split, metric_labels
 
     axes[0].legend(
         handles=[
-            Patch(facecolor=split[side]["fill"], alpha=0.5,
-                  edgecolor=split[side]["edge"], label=split[side]["label"])
+            Patch(
+                facecolor=split[side]["fill"],
+                alpha=0.5,
+                edgecolor=split[side]["edge"],
+                label=split[side]["label"],
+            )
             for side in ("left", "right")
         ],
-        fontsize=fs - 2, loc=legend_loc, ncol=2, columnspacing=1.0, framealpha=0.9,
+        fontsize=fs - 2,
+        loc=legend_loc,
+        ncol=2,
+        columnspacing=1.0,
+        framealpha=0.9,
     )
     return fig

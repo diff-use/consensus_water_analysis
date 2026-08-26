@@ -22,8 +22,6 @@ def best_sym_positions(
     is nearest, then apply the inverse transform to place the water in the canonical
     protein ASU.  This matches the phenix.sort_hetatms convention.
 
-    Ported from porting_reference/filter_waters_by_distance.py::best_sym_positions.
-
     Parameters
     ----------
     water_pos_orth   : (N, 3) orthogonal coordinates in Å
@@ -145,7 +143,7 @@ def keep_by_bfactor(
     `exclusive_borderline` is set — dropping waters sitting exactly on the cutoff.
 
     mode="zscore" (default): keep waters whose B-factor z-score <= cutoff, where the
-    z-score standardises each water's B-factor against a reference `population` of
+    z-score standardizes each water's B-factor against a reference `population` of
     B-factors — "water" (water O atoms, default), "protein" (protein heavy atoms), or
     "all" (every atom). High B-factors (poorly ordered waters) land above the cutoff
     and are dropped. A degenerate reference (std == 0) keeps every water.

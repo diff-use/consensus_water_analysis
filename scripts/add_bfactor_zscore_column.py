@@ -1,12 +1,12 @@
 """Append a per-structure B-factor z-score column to a cluster_members.csv.
 
-For each pdb_id in the table, the z-score standardises each water's B-factor
+For each pdb_id in the table, the z-score standardizes each water's B-factor
 against a reference population of B-factors read from the original CIF —
 "water" (water O atoms), "protein" (protein heavy atoms) or "all" (every atom),
 the same reference `cw.filter.keep_by_bfactor(mode="zscore")` uses. This means
 `b_factor_zscore <= X` selects exactly the waters the B-factor z-score filter at
 cutoff X would keep, for the same population. A degenerate structure (population
-std 0) gets z = 0.0, matching keep_by_bfactor's "keep every water" behaviour.
+std 0) gets z = 0.0, matching keep_by_bfactor's "keep every water" behavior.
 
 The population defaults to config.BFACTOR_POPULATION (itself "water" by default)
 so the column agrees with Stage 2 without being told twice.
