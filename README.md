@@ -63,6 +63,7 @@ Tag [`v0.1.0`](https://github.com/diff-use/consensus_water_analysis/tree/v0.1.0)
   violins plot `b_factor_zscore`, which the clustering stage does not write.
   - `-j` sets the number of alignment worker processes and defaults to the machine's CPU
   count. Lower it (`-j 4`) if alignment is killed for memory on the larger cohorts.
+
   Each dataset directory should then hold (row counts exclude the header):
 
   | Dataset                        | `metadata.csv` | `clusters.csv` | `cluster_members.csv` |

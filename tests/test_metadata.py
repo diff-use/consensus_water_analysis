@@ -1,5 +1,5 @@
 """
-Fill in GROUND_TRUTH from notebooks/00_one_structure.py output for TEST_PDB_ID.
+Fill in GROUND_TRUTH from notebooks/00_metadata_filter_align_demo.py output for TEST_PDB_ID.
 Once set, these become regression guards for the CIF parsing logic.
 """
 
