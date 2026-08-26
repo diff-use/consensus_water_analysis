@@ -618,6 +618,8 @@ def make_panel_grid(
         if cbar_fontsize is not None:
             cb.set_label(cbar_label, fontsize=cbar_fontsize)
             cb.ax.tick_params(labelsize=cbar_fontsize)
+
+
 def finite(values):
     """`values` as a float array with NaN/inf dropped."""
     values = np.asarray(values, dtype=float)

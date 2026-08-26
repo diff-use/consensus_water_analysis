@@ -103,6 +103,8 @@ def read_phenix_cif(path: Path) -> pdbx.CIFFile:
     """
     st = gemmi.read_structure(str(path))
     return pdbx.CIFFile.read(io.StringIO(st.make_mmcif_document().as_string()))
+
+
 def load_cohort_frames(data_dir, cohort, cutoff, match_radius, suffix=""):
     """(per-water frame, per-structure frame, one-line summary) for one cohort.
 
